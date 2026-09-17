@@ -18,63 +18,6 @@ def set_seed(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def _set_data(data):
-    data = data.set_index('time', append=True)
-    index = data.index
-    feature = data[['chan0','chan1','chan2','chan3']].values.astype("float32")
-    label = data[['conver']].values.astype("float32")
-    return index, feature, label
-
-def _create_ts_slices(index, seq_len):
-    """
-    create time series slices from pandas index
-    Args:
-        index (pd.MultiIndex): pandas multiindex with <instrument, datetime> order
-        seq_len (int): sequence length
-    """
-    assert index.is_lexsorted(), "index should be sorted"
-
-    # number of dates for each code
-    sample_count_by_codes = pd.Series(0, index=index).groupby(level=0).size().values
-
-    # start_index for each code
-    start_index_of_codes = np.roll(np.cumsum(sample_count_by_codes), 1)
-    start_index_of_codes[0] = 0
-
-    # all the [start, stop) indices of features
-    # features btw [start, stop) are used to predict the `stop - 1` label
-    slices = []
-    for cur_loc, cur_cnt in zip(start_index_of_codes, sample_count_by_codes):
-        for stop in range(seq_len, cur_cnt + 1):
-            end = cur_loc + stop
-            start = max(end - seq_len, 0)
-            slices.append(slice(start, end))
-
-    slices = np.array(slices)
-    return slices
-
-def evaluate(pred):
-    '''
-
-    Args:
-        pred: DataFrame for prediction
-
-    Returns:
-
-    '''
-
-    #pred = pred.rank(pct=True)  # transform into percentiles
-
-    # get the 'score', 'label' column
-    score = pred.score
-    label = pred.label
-    # calculate the metrics
-    diff = score - label
-    MSE = (diff**2).mean()
-    MAE = (diff.abs()).mean()
-    IC = score.corr(label)  # calculate the correlation between two columns ('score' and 'label')
-    return {"MSE": MSE, "MAE": MAE, "IC": IC}
-
 def shoot_infs(inp_tensor):
     """Replaces inf by maximum of tensor"""
     mask_inf = torch.isinf(inp_tensor)
@@ -96,7 +39,6 @@ def shoot_infs(inp_tensor):
 def sinkhorn(Q, n_iters=3, epsilon=0.01):
     # epsilon should be adjusted according to logits value's scale
     with torch.no_grad():
-
         # Q = shoot_infs(Q)
         #
         # Q = torch.exp(Q / epsilon)
@@ -227,7 +169,6 @@ class TRAModel(object):
 
         epoch_loss = 0
         total_count = 0
-
 
         for batch_idx, data in enumerate(train_data):
             # count += 1

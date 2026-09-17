@@ -1,0 +1,5 @@
+dv_count2.npy: (9916, 92, 12)
+
+十二个维度：
+content_id,visite_time, click_uv_1d, consume_uv_1d, consume_uv_1d_valid, favor_uv_1d,
+comment_uv_1d, share_uv_1d, collect_uv_1d, attention_uv_1d, lead_shop_uv_1d, cart_uv_1d
