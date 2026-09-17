@@ -14,3 +14,9 @@ def focal_loss(pred, y, reduction = 'mean', alpha=0.75, gamma=2.0):
         return loss.mean() # final prediction
     else:
         return loss # loss, matrix
+
+def transfer_pred(out, threshold):
+    pred = out.clone()
+    pred[torch.where(out < threshold)] = 0
+    pred[torch.where(out >= threshold)] = 1
+    return pred

@@ -11,8 +11,8 @@ from tqdm import tqdm
 
 from RaiseModel import Raise, sinkhorn
 from load_data import LoadAliDt
-from util.evaluate import focal_loss
-from sklearn.metrics import roc_auc_score, average_precision_score
+from util.evaluate import focal_loss, transfer_pred
+from sklearn.metrics import roc_auc_score, average_precision_score, classification_report
 
 def _configTrainArgs():
     parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
@@ -24,7 +24,7 @@ def _configTrainArgs():
     parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=16) # 64
 
     parser.add_argument('--bs', type=int, help='batch size', default=8192)
-    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=10)
+    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=1)
     parser.add_argument('--gpu', type=int, help='idx for the gpu to use', default=0)
     parser.add_argument('--seed', type=int, help='random', default=101)
     return parser.parse_args()
@@ -82,7 +82,14 @@ def train(args):
     ts_pred, _, _ = best_model(tsDt.x)
     ts_auc = roc_auc_score(tsDt.y.detach().numpy(), ts_pred.detach().numpy())
     ts_auprc = average_precision_score(tsDt.y.detach().numpy(), ts_pred.detach().numpy())
+    r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9, dim=None, keepdim=False))
+    class_rep = classification_report(tsDt.y.detach().numpy(), r1.detach().numpy(), output_dict=True)
+    ts_rec1 = class_rep['1.0']['recall']
+    ts_prec1 = class_rep['1.0']['precision']      # 异常类精确率（若需查看）
+    ts_f1 = class_rep['1.0']['f1-score']          # 异常类 F1（新增）
+
     ts_res['auc'], ts_res['auprc'] = ts_auc, ts_auprc
+    ts_res['rec'], ts_res['prec'], ts_res['f1'] = ts_rec1, ts_prec1, ts_f1
     return ts_res
 
 if __name__ == "__main__":
@@ -90,6 +97,9 @@ if __name__ == "__main__":
     set_seed(args.seed)
     ts_res = train(args)
 
-    print(' AUC {:.4f}, '.format(np.mean(ts_res['auc'])),
-          ' PRAUC {:.4f}, '.format(np.mean(ts_res['pr-auc']))
-    )
+    print(' AUC {:.4f}, '.format(ts_res['auc']),
+          ' PRAUC {:.4f}, '.format(ts_res['auprc']),
+          ' PREC-1 {:.4f}, '.format(ts_res['prec']),
+          ' REC-1 {:.4f}, '.format(ts_res['rec']),
+          ' F1-1 {:.4f}, '.format(ts_res['f1']),)
+
