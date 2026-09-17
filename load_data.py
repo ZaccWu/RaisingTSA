@@ -8,7 +8,7 @@ class TSAData(Dataset):
     def __init__(self, x_l, y_l):
         super(TSAData, self).__init__()
         self.x = torch.FloatTensor(x_l)
-        self.y = torch.LongTensor(y_l)
+        self.y = torch.FloatTensor(y_l)
     def __getitem__(self, idx):
         return self.x[idx], self.y[idx]
     def __len__(self):
@@ -100,7 +100,7 @@ if __name__ == '__main__':
     pass
     # dataLoader = LoadAliDt()
     # trDt, vaDt, tsDt = dataLoader.loadTrainTest()
-    # print(trDt.x.shape, vaDt.x.shape, tsDt.x.shape)
+    # print(trDt.x.shape, vaDt.x.shape, tsDt.x.shape) # [337144, 30, 10], [99160, 30, 10], [198320, 30, 10]
     # print(trDt.y.shape, vaDt.y.shape, tsDt.y.shape)
 
 

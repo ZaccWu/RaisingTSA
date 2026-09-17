@@ -3,6 +3,8 @@ import torch.nn.functional as F
 
 def focal_loss(pred, y, reduction = 'mean', alpha=0.75, gamma=2.0):
     # pred 为 logits
+    if y.shape != pred.shape:
+        y = y.expand_as(pred).contiguous()
     bce = F.binary_cross_entropy_with_logits(pred, y, reduction='none')
     p = torch.sigmoid(pred) # (n) or (n,k)
     p_t = p * y + (1 - p) * (1 - y)

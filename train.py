@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from RaiseModel import Raise
+from RaiseModel import Raise, sinkhorn
 from load_data import LoadAliDt
 from util.evaluate import focal_loss
 from sklearn.metrics import roc_auc_score, average_precision_score
@@ -23,8 +23,8 @@ def _configTrainArgs():
 
     parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=16) # 64
 
-    parser.add_argument('--bs', type=int, help='batch size', default=2048)
-    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=100)
+    parser.add_argument('--bs', type=int, help='batch size', default=8192)
+    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=10)
     parser.add_argument('--gpu', type=int, help='idx for the gpu to use', default=0)
     parser.add_argument('--seed', type=int, help='random', default=101)
     return parser.parse_args()
@@ -59,15 +59,10 @@ def train(args):
             pred, all_preds, prob = model(x_b)
             loss = focal_loss(pred, y_b)
             L = focal_loss(all_preds, y_b[:, None], reduction=None)
-            print(L)
-
-
-            # print("L before norm:", L)
-            #L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
-            # print("L after norm:", L)
+            L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
 
             if prob is not None:
-                P = model.sinkhorn(-L, epsilon=0.01)  # sample assignment matrix
+                P = sinkhorn(-L, epsilon=0.01)  # sample assignment matrix
                 lamb = args.lamb * (args.rho ** global_step)
                 reg = prob.log().mul(P).sum(dim=-1).mean()
                 loss = loss - lamb * reg
@@ -79,14 +74,14 @@ def train(args):
         va_pred, _, _ = model(vaDt.x)
         va_loss = focal_loss(va_pred, vaDt.y)
         print(' Epoch {}, va_loss {:.4f}, '.format(i, va_loss))
-        va_score = average_precision_score(vaDt.y.cpu().numpy(), va_pred.cpu().numpy())
+        va_score = average_precision_score(vaDt.y.detach().numpy(), va_pred.detach().numpy())
         if va_score > best_va_score:
             best_va_score = va_score
             best_model = model
         
     ts_pred, _, _ = best_model(tsDt.x)
-    ts_auc = roc_auc_score(tsDt.y.cpu().numpy(), ts_pred.cpu().numpy())
-    ts_auprc = average_precision_score(tsDt.y.cpu().numpy(), ts_pred.cpu().numpy())
+    ts_auc = roc_auc_score(tsDt.y.detach().numpy(), ts_pred.detach().numpy())
+    ts_auprc = average_precision_score(tsDt.y.detach().numpy(), ts_pred.detach().numpy())
     ts_res['auc'], ts_res['auprc'] = ts_auc, ts_auprc
     return ts_res
 
