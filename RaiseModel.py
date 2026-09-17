@@ -35,7 +35,7 @@ def shoot_infs(inp_tensor):
 
 class LSTMHA(torch.nn.Module):
     def __init__(self, in_dim, h_dim,
-                 lstm_num_layers=1, dropout=0.2):
+                 lstm_num_layers=2, dropout=0.2):
         """
         Receive: batch_size, seq_len, input_size
         """

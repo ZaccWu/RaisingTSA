@@ -21,10 +21,10 @@ def _configTrainArgs():
     parser.add_argument('--lamb', type=float, help='rho', default=1) # default 1
     parser.add_argument('--lr', type=float, help='learning rate', default=1e-3) # default 1e-3
 
-    parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=16) # 64
+    parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=32) # 64
 
-    parser.add_argument('--bs', type=int, help='batch size', default=8192)
-    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=1)
+    parser.add_argument('--bs', type=int, help='batch size', default=512) # cpu: 8192, gpu: 2048
+    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=50)
     parser.add_argument('--gpu', type=int, help='idx for the gpu to use', default=0)
     parser.add_argument('--seed', type=int, help='random', default=101)
     return parser.parse_args()
@@ -54,7 +54,7 @@ def train(args):
         model_training = True
         global_step += 1
         for batch_idx, (x_b, y_b) in enumerate(trDt_loader):
-            #print(trDt_b)
+            x_b, y_b = x_b.to(device), y_b.to(device)
             optimizer.zero_grad()
             pred, all_preds, prob = model(x_b)
             loss = focal_loss(pred, y_b)
@@ -71,19 +71,19 @@ def train(args):
             optimizer.step()
         
         model_training = False
-        va_pred, _, _ = model(vaDt.x)
-        va_loss = focal_loss(va_pred, vaDt.y)
-        print(' Epoch {}, va_loss {:.4f}, '.format(i, va_loss))
-        va_score = average_precision_score(vaDt.y.detach().numpy(), va_pred.detach().numpy())
+        va_pred, _, _ = model(vaDt.x.to(device))
+        va_loss = focal_loss(va_pred, vaDt.y.to(device))
+        va_score = average_precision_score(vaDt.y.detach().cpu().numpy(), va_pred.detach().cpu().numpy())
+        print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
         if va_score > best_va_score:
             best_va_score = va_score
             best_model = model
         
-    ts_pred, _, _ = best_model(tsDt.x)
+    ts_pred, _, _ = best_model(tsDt.x.to(device))
     ts_auc = roc_auc_score(tsDt.y.detach().numpy(), ts_pred.detach().numpy())
-    ts_auprc = average_precision_score(tsDt.y.detach().numpy(), ts_pred.detach().numpy())
+    ts_auprc = average_precision_score(tsDt.y.detach().cpu().numpy(), ts_pred.detach().cpu().numpy())
     r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9, dim=None, keepdim=False))
-    class_rep = classification_report(tsDt.y.detach().numpy(), r1.detach().numpy(), output_dict=True)
+    class_rep = classification_report(tsDt.y.detach().cpu().numpy(), r1.detach().cpu().numpy(), output_dict=True)
     ts_rec1 = class_rep['1.0']['recall']
     ts_prec1 = class_rep['1.0']['precision']      # 异常类精确率（若需查看）
     ts_f1 = class_rep['1.0']['f1-score']          # 异常类 F1（新增）
