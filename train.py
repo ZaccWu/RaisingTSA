@@ -27,7 +27,7 @@ def _configTrainArgs():
 
 
     parser.add_argument('--bs', type=int, help='batch size', default=8192) # cpu: 8192, gpu: 2048
-    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=200)
+    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=100)
     parser.add_argument('--gpu', type=int, help='idx for the gpu to use', default=0)
     parser.add_argument('--seed', type=int, help='random', default=101)
     return parser.parse_args()
@@ -102,7 +102,7 @@ def train(args):
                 L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
 
                 #P = sinkhorn(-L, epsilon=0.01)  # sample assignment matrix
-                P = partial_sinkhorn(-L, epsilon=0.1, n_iters=20, tai=args.tai)
+                P = partial_sinkhorn(-L, epsilon=0.1, tai=args.tai, n_iters=20)
                 lamb = args.lamb * (args.rho ** global_step)
                 ot_loss = prob.log().mul(P).sum(dim=-1).mean()
                 loss = pred_loss - lamb * ot_loss
@@ -112,13 +112,19 @@ def train(args):
         
         model.training = False
         va_pred_all, _, va_y_all, va_prds_all, va_loss = evalInBatches(model, vaDt_loader, device)
-        va_score = average_precision_score(va_y_all.numpy(), va_pred_all.numpy())
+        #va_score = average_precision_score(va_y_all.numpy(), va_pred_all.numpy())
+        r1 = transfer_pred(va_pred_all, torch.quantile(va_pred_all, 0.9))
+        class_rep = classification_report(
+            va_y_all.numpy().astype(int), r1.numpy().astype(int),
+            output_dict=True, zero_division=0)
+        va_score = class_rep.get('1', {}).get('recall', 0.0)
         print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
         #print('Predictors: ', pd.Series(va_prds_all.numpy()).value_counts())
         if va_score > best_va_score:
             best_va_score = va_score
             best_model = model
             best_epoch_id = i
+        final_model = model
     
     model.training = False
     ts_pred, _, ts_y, ts_prds, _ = evalInBatches(best_model, tsDt_loader, device, return_loss=False)

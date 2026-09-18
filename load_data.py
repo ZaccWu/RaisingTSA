@@ -14,18 +14,14 @@ class TSAData(Dataset):
     def __len__(self):
         return (len(self.y))
 
-def normFeatureWise(all_stock_feature):
-    # normalize for each feature
-    normalized_data = np.zeros_like(all_stock_feature)
-    for feature_idx in range(all_stock_feature.shape[2]):
-        feature_data = all_stock_feature[:, :, feature_idx]
-        min_val = feature_data.min()
-        max_val = feature_data.max()
-        normalized_data[:, :, feature_idx] = (feature_data - min_val) / (max_val - min_val)
-    normalized_feature = normalized_data
-    return normalized_feature
+def normFeatureWise(all_stock_feature, tr_len):
+    x = all_stock_feature
+    mu  = x[:, :tr_len, :].mean(axis=1, keepdims=True)   # (S, 1, F)
+    std = x[:, :tr_len, :].std(axis=1,  keepdims=True) + 1e-6
+    x = (x - mu) / std
+    return x
 
-def preprocessAliDt(df):
+def preprocessAliDt(df, tr_len):
     num_content = df.shape[0]
     all_stock_feature, all_stock_sales = [], []
     for j in range(num_content):
@@ -36,7 +32,7 @@ def preprocessAliDt(df):
         all_stock_sales.append(sales_j)
     all_stock_feature = np.array(all_stock_feature)  # (stock_num, time_step, feature_dim)
     all_stock_sales = np.array(all_stock_sales).transpose((1, 0))  # -> (time_step, stock_num)
-    all_stock_feature_norm = normFeatureWise(all_stock_feature)
+    all_stock_feature_norm = normFeatureWise(all_stock_feature, tr_len)
     return all_stock_feature_norm, all_stock_sales
 
 def getDv(all_stock_sales, time_len, num_stock, tau):
@@ -59,7 +55,7 @@ class LoadAliDt():
         self.tr_len, self.trva_len = int(self.time_length*0.7), int(self.time_length*0.8)
 
         # process feature (stock_num, time_step, feature_dim) and target (time_step, stock_num)
-        self.all_stock_feature, self.all_stock_sales = preprocessAliDt(self.df)
+        self.all_stock_feature, self.all_stock_sales = preprocessAliDt(self.df, self.tr_len)
         # dvckass -> (time_step-tau, stock_num)
         self.all_stock_dv, self.all_stock_dvclass = getDv(self.all_stock_sales, self.time_length, self.num_stock, self.tau)
 
@@ -100,10 +96,10 @@ class LoadAliDt():
 if __name__ == '__main__':
     #pass
     dataLoader = LoadAliDt()
-    print(np.mean(dataLoader.all_stock_dv),np.std(dataLoader.all_stock_dv),np.max(dataLoader.all_stock_dv),np.min(dataLoader.all_stock_dv))
-    # trDt, vaDt, tsDt = dataLoader.loadTrainTest()
-    # print(trDt.x.shape, vaDt.x.shape, tsDt.x.shape) # [337144, 30, 10], [99160, 30, 10], [198320, 30, 10]
-    # print(trDt.y.shape, vaDt.y.shape, tsDt.y.shape) # [337144], [99160], [198320]
+    # print(np.mean(dataLoader.all_stock_dv),np.std(dataLoader.all_stock_dv),np.max(dataLoader.all_stock_dv),np.min(dataLoader.all_stock_dv))
+    trDt, vaDt, tsDt = dataLoader.loadTrainTest()
+    print(trDt.x.shape, vaDt.x.shape, tsDt.x.shape) # [337144, 30, 10], [99160, 30, 10], [198320, 30, 10]
+    print(trDt.y.shape, vaDt.y.shape, tsDt.y.shape) # [337144], [99160], [198320]
 
 
 

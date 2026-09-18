@@ -14,7 +14,7 @@ def sinkhorn(Q, n_iters=3, epsilon=0.01):
         #print(Q)
     return Q
 
-def partial_sinkhorn(M, n_iters=20, epsilon=0.1, tai=1.0, row_normalize=True):
+def partial_sinkhorn(M, epsilon=0.1, tai=1.0, n_iters=20, row_normalize=True):
     """
     Solves:
         min_{P>=0} <P,M> + eps * sum(P log P)
@@ -81,11 +81,20 @@ class LSTMHA(torch.nn.Module):
                             batch_first=True,
                             bidirectional=False,
                             dropout=dropout)
+        self.attn_W = torch.nn.Linear(h_dim, h_dim, bias=True)
+        self.attn_v = torch.nn.Linear(h_dim, 1, bias=False)
 
     def forward(self, x):
         outputs, _ = self.lstm(x)   # outputs: (batch, seq_len, hidden_size)
+
+        # (B, K, H) -> (B, K, 1)
+        score = self.attn_v(torch.tanh(self.attn_W(outputs)))   # (B, K, 1)
+        alpha = torch.softmax(score, dim=1)                     # (B, K, 1)
+        out   = (outputs * alpha).sum(dim=1)                    # (B, H)
+        return out
+
         #outputs = outputs.transpose(1,2)  # (batch*stock_num, hidden_size, window_size_K)
-        return outputs[:,-1,:]
+        #return outputs[:,-1,:]
 
 class Raise(torch.nn.Module):
     def __init__(self, in_dim, h_dim, num_states=3):
