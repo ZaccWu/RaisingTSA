@@ -19,12 +19,12 @@ def _configTrainArgs():
     parser.add_argument('--ns', type=int, help='num of state', default=3)
     parser.add_argument('--rho', type=float, help='rho', default=0.99) # default 0.99
     parser.add_argument('--lamb', type=float, help='rho', default=1) # default 1
-    parser.add_argument('--lr', type=float, help='learning rate', default=1e-3) # default 1e-3
+    parser.add_argument('--lr', type=float, help='learning rate', default=0.01) # default 0.01
 
-    parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=32) # 64
+    parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=64) # 64
 
     parser.add_argument('--bs', type=int, help='batch size', default=8192) # cpu: 8192, gpu: 2048
-    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=50)
+    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=200)
     parser.add_argument('--gpu', type=int, help='idx for the gpu to use', default=0)
     parser.add_argument('--seed', type=int, help='random', default=101)
     return parser.parse_args()
@@ -41,23 +41,27 @@ def set_seed(seed):
 @torch.no_grad()
 def evalInBatches(model, data_loader, device, return_loss=True):
     model.eval()
-    preds_list, labels_list = [], []
+    preds_list, labels_list, prds_list = [], [], []
     loss_sum, n_sample = 0.0, 0
     for x_b, y_b in data_loader:
         x_b = x_b.to(device)
         y_b = y_b.to(device)
-        pred, _, _ = model(x_b)
+        pred, _, prob = model(x_b)
+        pred_select = prob.argmax(dim=-1)
         if return_loss:
             loss_b = focal_loss(pred, y_b)
             loss_sum += loss_b.item() * x_b.size(0)
             n_sample += x_b.size(0)
+        
         preds_list.append(pred.detach().cpu())
         labels_list.append(y_b.detach().cpu())
+        prds_list.append(pred_select.detach().cpu())
 
-    preds_all = torch.cat(preds_list, dim=0)
+    preds_all = torch.cat(prds_list, dim=0)
     labels_all = torch.cat(labels_list, dim=0)
+    prds_all = torch.cat(prds_list, dim=0)
     avg_loss = (loss_sum / max(n_sample, 1)) if return_loss else None
-    return preds_all, labels_all, avg_loss
+    return preds_all, labels_all, prds_all, avg_loss
 
 def train(args):
     device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() else 'cpu')
@@ -71,7 +75,7 @@ def train(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     global_step = -1
-    best_va_score = -np.inf
+    best_va_score, best_epoch_id = -np.inf, 0
     ts_res = {}
     for i in range(args.n_epoch):
         model.training = True
@@ -93,15 +97,19 @@ def train(args):
             optimizer.step()
         
         model.training = False
-        va_pred_all, va_y_all, va_loss = evalInBatches(model, vaDt_loader, device)
+        va_pred_all, va_y_all, va_prds_all, va_loss = evalInBatches(model, vaDt_loader, device)
         va_score = average_precision_score(va_y_all.numpy(), va_pred_all.numpy())
         print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
+        print('Predictors: ', pd.Series(va_prds_all.numpy()).value_counts())
         if va_score > best_va_score:
             best_va_score = va_score
             best_model = model
+            best_epoch_id = i
     
     model.training = False
-    ts_pred, ts_y, _ = evalInBatches(best_model, tsDt_loader, device, return_loss=False)
+    ts_pred, ts_y, ts_prds, _ = evalInBatches(best_model, tsDt_loader, device, return_loss=False)
+    print('Best epoch: ', best_epoch_id, 'Predictors: ', pd.Series(ts_prds.numpy()).value_counts())
+
     ts_auc = roc_auc_score(ts_y.numpy(), ts_pred.numpy())
     ts_auprc = average_precision_score(ts_y.numpy(), ts_pred.numpy())
     r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9))
@@ -124,4 +132,5 @@ if __name__ == "__main__":
           ' PREC-1 {:.4f}, '.format(ts_res['prec']),
           ' REC-1 {:.4f}, '.format(ts_res['rec']),
           ' F1-1 {:.4f}, '.format(ts_res['f1']),)
+    print('ns: ', args.ns, 'lamb', args.lamb)
 

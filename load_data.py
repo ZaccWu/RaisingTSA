@@ -101,7 +101,7 @@ if __name__ == '__main__':
     # dataLoader = LoadAliDt()
     # trDt, vaDt, tsDt = dataLoader.loadTrainTest()
     # print(trDt.x.shape, vaDt.x.shape, tsDt.x.shape) # [337144, 30, 10], [99160, 30, 10], [198320, 30, 10]
-    # print(trDt.y.shape, vaDt.y.shape, tsDt.y.shape)
+    # print(trDt.y.shape, vaDt.y.shape, tsDt.y.shape) # [337144], [99160], [198320]
 
 
 
