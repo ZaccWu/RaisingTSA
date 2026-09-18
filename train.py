@@ -9,19 +9,22 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from RaiseModel import Raise, sinkhorn
+from RaiseModel import Raise, sinkhorn, partial_sinkhorn
 from load_data import LoadAliDt
-from util.evaluate import focal_loss, transfer_pred
+from util.evaluate import focal_loss, transfer_pred, huber_loss, pairwise_ranking_loss
 from sklearn.metrics import roc_auc_score, average_precision_score, classification_report
 
 def _configTrainArgs():
     parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
     parser.add_argument('--rho', type=float, help='rho', default=0.99) # default 0.99
+    parser.add_argument('--tai', type=float, default=0.1, help='entropic tai for partial OT') # default 0.1
+    parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=64) # 64
+
+    parser.add_argument('--beta', type=float, help='beta', default=1) # default 1
     parser.add_argument('--lamb', type=float, help='rho', default=1) # default 1
     parser.add_argument('--lr', type=float, help='learning rate', default=0.01) # default 0.01
 
-    parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=64) # 64
 
     parser.add_argument('--bs', type=int, help='batch size', default=8192) # cpu: 8192, gpu: 2048
     parser.add_argument('--n_epoch', type=int, help='number of epochs', default=200)
@@ -29,6 +32,7 @@ def _configTrainArgs():
     parser.add_argument('--seed', type=int, help='random', default=101)
     return parser.parse_args()
 
+LOG_THRESHOLD = math.log(2.21)
 
 def set_seed(seed):
     random.seed(seed)
@@ -41,27 +45,30 @@ def set_seed(seed):
 @torch.no_grad()
 def evalInBatches(model, data_loader, device, return_loss=True):
     model.eval()
-    preds_list, labels_list, prds_list = [], [], []
+    preds_list, y_cont_list, y_bin_list, prds_list = [], [], [], []
     loss_sum, n_sample = 0.0, 0
     for x_b, y_b in data_loader:
         x_b = x_b.to(device)
         y_b = y_b.to(device)
         pred, _, prob = model(x_b)
-        pred_select = prob.argmax(dim=-1)
+        prd_select = prob.argmax(dim=-1)
+
         if return_loss:
-            loss_b = focal_loss(pred, y_b)
+            loss_b = huber_loss(pred, y_b)
             loss_sum += loss_b.item() * x_b.size(0)
             n_sample += x_b.size(0)
-        
-        preds_list.append(pred.detach().cpu())
-        labels_list.append(y_b.detach().cpu())
-        prds_list.append(pred_select.detach().cpu())
 
-    preds_all = torch.cat(prds_list, dim=0)
-    labels_all = torch.cat(labels_list, dim=0)
+        preds_list.append(pred.detach().cpu())
+        y_cont_list.append(y_b.detach().cpu())
+        y_bin_list.append((y_b >= LOG_THRESHOLD).float().detach().cpu())
+        prds_list.append(prd_select.detach().cpu())
+
+    preds_all = torch.cat(preds_list, dim=0)
+    y_cont_all = torch.cat(y_cont_list, dim=0)
+    y_bin_all = torch.cat(y_bin_list, dim=0)
     prds_all = torch.cat(prds_list, dim=0)
     avg_loss = (loss_sum / max(n_sample, 1)) if return_loss else None
-    return preds_all, labels_all, prds_all, avg_loss
+    return preds_all, y_cont_all, y_bin_all, prds_all, avg_loss
 
 def train(args):
     device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() else 'cpu')
@@ -85,38 +92,50 @@ def train(args):
             x_b, y_b = x_b.to(device), y_b.to(device)
             optimizer.zero_grad()
             pred, all_preds, prob = model(x_b)
-            loss = focal_loss(pred, y_b)
-            L = focal_loss(all_preds, y_b[:, None], reduction=None)
-            L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
+
+            # (1) 主损失：Huber 回归 + 成对排序
+            reg_loss = huber_loss(pred, y_b)
+            rank_loss = pairwise_ranking_loss(pred, y_b)
+            pred_loss = reg_loss + args.beta * rank_loss
             if prob is not None:
-                P = sinkhorn(-L, epsilon=0.01)  # sample assignment matrix
+                L = huber_loss(all_preds, y_b[:, None].expand_as(all_preds), reduction='none')          # (B, num_states)
+                L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
+
+                #P = sinkhorn(-L, epsilon=0.01)  # sample assignment matrix
+                P = partial_sinkhorn(-L, epsilon=0.1, n_iters=20, tai=args.tai)
                 lamb = args.lamb * (args.rho ** global_step)
-                reg = prob.log().mul(P).sum(dim=-1).mean()
-                loss = loss - lamb * reg
+                ot_loss = prob.log().mul(P).sum(dim=-1).mean()
+                loss = pred_loss - lamb * ot_loss
+                #print(reg_loss.detach(),  rank_loss.detach(), (-ot_loss).detach())
             loss.backward()
             optimizer.step()
         
         model.training = False
-        va_pred_all, va_y_all, va_prds_all, va_loss = evalInBatches(model, vaDt_loader, device)
+        va_pred_all, _, va_y_all, va_prds_all, va_loss = evalInBatches(model, vaDt_loader, device)
         va_score = average_precision_score(va_y_all.numpy(), va_pred_all.numpy())
         print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
-        print('Predictors: ', pd.Series(va_prds_all.numpy()).value_counts())
+        #print('Predictors: ', pd.Series(va_prds_all.numpy()).value_counts())
         if va_score > best_va_score:
             best_va_score = va_score
             best_model = model
             best_epoch_id = i
     
     model.training = False
-    ts_pred, ts_y, ts_prds, _ = evalInBatches(best_model, tsDt_loader, device, return_loss=False)
+    ts_pred, _, ts_y, ts_prds, _ = evalInBatches(best_model, tsDt_loader, device, return_loss=False)
+    #print('Best epoch: ', best_epoch_id)
     print('Best epoch: ', best_epoch_id, 'Predictors: ', pd.Series(ts_prds.numpy()).value_counts())
+
 
     ts_auc = roc_auc_score(ts_y.numpy(), ts_pred.numpy())
     ts_auprc = average_precision_score(ts_y.numpy(), ts_pred.numpy())
+
     r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9))
-    class_rep = classification_report(ts_y.numpy(), r1.numpy(), output_dict=True)
-    ts_rec1 = class_rep['1.0']['recall']
-    ts_prec1 = class_rep['1.0']['precision']      # 异常类精确率（若需查看）
-    ts_f1 = class_rep['1.0']['f1-score']          # 异常类 F1（新增）
+    class_rep = classification_report(
+        ts_y.numpy().astype(int), r1.numpy().astype(int),
+        output_dict=True, zero_division=0)
+    ts_prec1 = class_rep.get('1', {}).get('precision', 0.0)
+    ts_rec1  = class_rep.get('1', {}).get('recall', 0.0)
+    ts_f1    = class_rep.get('1', {}).get('f1-score', 0.0)
 
     ts_res['auc'], ts_res['auprc'] = ts_auc, ts_auprc
     ts_res['rec'], ts_res['prec'], ts_res['f1'] = ts_rec1, ts_prec1, ts_f1

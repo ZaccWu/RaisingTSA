@@ -14,6 +14,42 @@ def sinkhorn(Q, n_iters=3, epsilon=0.01):
         #print(Q)
     return Q
 
+def partial_sinkhorn(M, n_iters=20, epsilon=0.1, tai=1.0, row_normalize=True):
+    """
+    Solves:
+        min_{P>=0} <P,M> + eps * sum(P log P)
+                   + tau * KL(P1 || a) + tau * KL(P^T1 || b)
+    with a = 1/n, b = 1/m (uniform).
+
+    Args:
+        M:  (n, m) cost matrix (lower = better assignment).
+        epsilon: entropic regularization.
+        tau: marginal penalty.  tau -> inf  == standard Sinkhorn (exact marginals)
+                                 tau -> 0    == no column constraint (per-row softmax)
+        n_iters: number of iterations.
+        row_normalize: force each row to sum to 1 (matches prob's Gumbel-softmax).
+    Returns:
+        P: (n, m) approximate transport plan.
+    """
+    n, m = M.shape
+    device = M.device
+    a = torch.full((n,), 1.0 / n, device=device)
+    b = torch.full((m,), 1.0 / m, device=device)
+
+    # 数值稳定：减去每行最小值
+    M = M - M.min(dim=1, keepdim=True).values
+    K = torch.exp(-M / epsilon)
+    u = torch.ones(n, device=device)
+    v = torch.ones(m, device=device)
+    exp_ratio = tai / (tai + epsilon)   # in (0, 1]
+    for _ in range(n_iters):
+        u = (a / (K @ v + 1e-12)).clamp(min=1e-12) ** exp_ratio
+        v = (b / (K.T @ u + 1e-12)).clamp(min=1e-12) ** exp_ratio
+    P = u[:, None] * K * v[None, :]
+    if row_normalize:
+        P = P / (P.sum(dim=1, keepdim=True) + 1e-12)
+    return P
+
 def shoot_infs(inp_tensor):
     """Replaces inf by maximum of tensor"""
     mask_inf = torch.isinf(inp_tensor)
