@@ -4,9 +4,8 @@ import torch.nn.functional as F
 def sinkhorn(Q, n_iters=3, epsilon=0.01):
     # epsilon should be adjusted according to logits value's scale
     with torch.no_grad():
-        # Q = shoot_infs(Q)
-        #
-        # Q = torch.exp(Q / epsilon)
+        Q = shoot_infs(Q)
+        Q = torch.exp(Q / epsilon)
         # print(Q)
         Q=-Q
         for i in range(n_iters):
