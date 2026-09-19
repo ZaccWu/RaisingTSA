@@ -1,54 +1,31 @@
 import torch
 import torch.nn.functional as F
 
-def sinkhorn(Q, n_iters=3, epsilon=0.01):
+def sinkhorn(Q, epsilon=0.1, n_iters=20):
     # epsilon should be adjusted according to logits value's scale
     with torch.no_grad():
         Q = shoot_infs(Q)
         Q = torch.exp(Q / epsilon)
-        # print(Q)
-        Q=-Q
         for i in range(n_iters):
             Q /= Q.sum(dim=0, keepdim=True)
             Q /= Q.sum(dim=1, keepdim=True)
-        #print(Q)
     return Q
 
-def partial_sinkhorn(M, epsilon=0.1, tai=1.0, n_iters=20, row_normalize=True):
-    """
-    Solves:
-        min_{P>=0} <P,M> + eps * sum(P log P)
-                   + tau * KL(P1 || a) + tau * KL(P^T1 || b)
-    with a = 1/n, b = 1/m (uniform).
-
-    Args:
-        M:  (n, m) cost matrix (lower = better assignment).
-        epsilon: entropic regularization.
-        tau: marginal penalty.  tau -> inf  == standard Sinkhorn (exact marginals)
-                                 tau -> 0    == no column constraint (per-row softmax)
-        n_iters: number of iterations.
-        row_normalize: force each row to sum to 1 (matches prob's Gumbel-softmax).
-    Returns:
-        P: (n, m) approximate transport plan.
-    """
-    n, m = M.shape
-    device = M.device
-    a = torch.full((n,), 1.0 / n, device=device)
-    b = torch.full((m,), 1.0 / m, device=device)
-
-    # 数值稳定：减去每行最小值
-    M = M - M.min(dim=1, keepdim=True).values
-    K = torch.exp(-M / epsilon)
-    u = torch.ones(n, device=device)
-    v = torch.ones(m, device=device)
-    exp_ratio = tai / (tai + epsilon)   # in (0, 1]
-    for _ in range(n_iters):
-        u = (a / (K @ v + 1e-12)).clamp(min=1e-12) ** exp_ratio
-        v = (b / (K.T @ u + 1e-12)).clamp(min=1e-12) ** exp_ratio
-    P = u[:, None] * K * v[None, :]
-    if row_normalize:
-        P = P / (P.sum(dim=1, keepdim=True) + 1e-12)
-    return P
+def partial_sinkhorn(Q, epsilon=0.1, tai=0.1, n_iters=20):
+    rho = tai / (tai + 0.1)  
+    with torch.no_grad():
+        Q = shoot_infs(Q)
+        K = torch.exp(Q / epsilon)                          # (num_sample, n_state)
+        B, Kd = K.shape
+        a = torch.ones(B,  1, device=K.device, dtype=K.dtype)     # (num_sample, 1)
+        b = torch.ones(Kd, 1, device=K.device, dtype=K.dtype)     # (n_state, 1) 
+        u = torch.ones(B,  1, device=K.device, dtype=K.dtype)     # (num_sample, 1)
+        v = torch.ones(Kd, 1, device=K.device, dtype=K.dtype)     # (n_state, 1)  
+        for _ in range(n_iters):
+            u = (a / (K @ v + 1e-12)).pow(rho)
+            v = (b / (K.t() @ u + 1e-12)).pow(rho)
+        Q = u * K * v.t() 
+    return Q
 
 def shoot_infs(inp_tensor):
     """Replaces inf by maximum of tensor"""
@@ -125,6 +102,7 @@ class Raise(torch.nn.Module):
         if self.training:
             final_pred = (preds * prob).sum(dim=-1)
         else:
+            #prob = F.softmax(preds / self.gstai, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
         # final_pred: (batch)
         return final_pred, preds, prob

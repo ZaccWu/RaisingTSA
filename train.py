@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+import copy
 from RaiseModel import Raise, sinkhorn, partial_sinkhorn
 from load_data import LoadAliDt
 from util.evaluate import focal_loss, transfer_pred, huber_loss, pairwise_ranking_loss
@@ -16,6 +16,8 @@ from sklearn.metrics import roc_auc_score, average_precision_score, classificati
 
 def _configTrainArgs():
     parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
+
+    parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
     parser.add_argument('--rho', type=float, help='rho', default=0.99) # default 0.99
     parser.add_argument('--tai', type=float, default=0.1, help='entropic tai for partial OT') # default 0.1
@@ -32,7 +34,7 @@ def _configTrainArgs():
     parser.add_argument('--seed', type=int, help='random', default=101)
     return parser.parse_args()
 
-LOG_THRESHOLD = math.log(2.21)
+LOG_THRESHOLD = math.log(2.21 + 1)
 
 def set_seed(seed):
     random.seed(seed)
@@ -101,8 +103,10 @@ def train(args):
                 L = huber_loss(all_preds, y_b[:, None].expand_as(all_preds), reduction='none')          # (B, num_states)
                 L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
 
-                #P = sinkhorn(-L, epsilon=0.01)  # sample assignment matrix
-                P = partial_sinkhorn(-L, epsilon=0.1, tai=args.tai, n_iters=20)
+                if args.ot == 'full':
+                    P = sinkhorn(-L, epsilon=0.1) 
+                else:
+                    P = partial_sinkhorn(L, epsilon=0.1, tai=args.tai)
                 lamb = args.lamb * (args.rho ** global_step)
                 ot_loss = prob.log().mul(P).sum(dim=-1).mean()
                 loss = pred_loss - lamb * ot_loss
@@ -119,16 +123,18 @@ def train(args):
             output_dict=True, zero_division=0)
         va_score = class_rep.get('1', {}).get('recall', 0.0)
         print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
-        #print('Predictors: ', pd.Series(va_prds_all.numpy()).value_counts())
+        print('Predictors: ', pd.Series(va_prds_all.numpy()).value_counts())
         if va_score > best_va_score:
             best_va_score = va_score
-            best_model = model
+            best_model_state = copy.deepcopy(model.state_dict())
             best_epoch_id = i
         final_model = model
     
     model.training = False
-    ts_pred, _, ts_y, ts_prds, _ = evalInBatches(best_model, tsDt_loader, device, return_loss=False)
-    #print('Best epoch: ', best_epoch_id)
+    #ts_pred, _, ts_y, ts_prds, _ = evalInBatches(final_model, tsDt_loader, device, return_loss=False)
+
+    model.load_state_dict(best_model_state)
+    ts_pred, _, ts_y, ts_prds, _ = evalInBatches(model, tsDt_loader, device, return_loss=False)
     print('Best epoch: ', best_epoch_id, 'Predictors: ', pd.Series(ts_prds.numpy()).value_counts())
 
 
