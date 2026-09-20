@@ -73,6 +73,25 @@ class LSTMHA(torch.nn.Module):
         #outputs = outputs.transpose(1,2)  # (batch*stock_num, hidden_size, window_size_K)
         #return outputs[:,-1,:]
 
+
+class LSTMAE(torch.nn.Module):
+    def __init__(self, in_dim, h_dim):
+        super().__init__()
+        self.encoder = torch.nn.LSTM(in_dim, h_dim, num_layers=1,
+                                     batch_first=True, bidirectional=False)
+        self.decoder = torch.nn.LSTM(h_dim, h_dim, num_layers=1,
+                                     batch_first=True, bidirectional=False)
+        self.out = torch.nn.Linear(h_dim, in_dim)
+
+    def forward(self, x):
+        # x: (B, K, F)
+        enc_seq, _ = self.encoder(x)        # (B, K, H)
+        dec_seq, _ = self.decoder(enc_seq)  # (B, K, H)
+        x_hat = self.out(dec_seq)           # (B, K, F)
+        return enc_seq, x_hat
+
+
+
 class Raise(torch.nn.Module):
     def __init__(self, in_dim, h_dim, num_states=3):
         super().__init__()
@@ -80,29 +99,75 @@ class Raise(torch.nn.Module):
         self.gstai = 1
         self.feature_extractor = LSTMHA(in_dim, h_dim)
         self.training = True
-        self.router = torch.nn.LSTM(
-            input_size = in_dim,
-            hidden_size = self.num_states,
-            num_layers = 1,
-            batch_first = True,
-        )
-        # self.fc = torch.nn.Linear(hidden_size + input_size, num_states)
+        self.router = LSTMAE(in_dim, h_dim)
+        self.fc = torch.nn.Linear(h_dim + in_dim, num_states)
         self.predictors = torch.nn.Linear(h_dim, self.num_states)
 
     def forward(self, x):
-
-        emb = self.feature_extractor(x)
+        emb = self.feature_extractor(x) # (n, K, fea_dim)->(n, h_dim)
         # input: (batch, hidden)
+        _, x_hat = self.router(x)  # (n, K, fea_dim)->(n, K, h_dim)
+        recon_err = (x_hat - x).pow(2).mean(dim=1)   # ->(n, fea_dim)
         preds = self.predictors(emb) # preds: (batch, 3)
 
         if self.num_states == 1:
             return preds.squeeze(-1), preds, None
         # prob: (batch, num_state)
-        prob = F.gumbel_softmax(preds, dim=-1, tau=self.gstai, hard=False)
+        #prob = F.gumbel_softmax(preds, dim=-1, tau=self.gstai, hard=False)
+        rot_out = self.fc(torch.cat([emb, recon_err], dim=-1))
+
         if self.training:
+            prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False)
             final_pred = (preds * prob).sum(dim=-1)
         else:
             #prob = F.softmax(preds / self.gstai, dim=-1)
+            prob = F.softmax(rot_out, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
         # final_pred: (batch)
+        return final_pred, preds, prob
+
+
+class RaiseSep(torch.nn.Module):
+    def __init__(self, in_dim, h_dim, num_states=3):
+        super().__init__()
+        self.num_states = num_states
+        self.gstai = 1
+        self.feature_extractor = LSTMHA(in_dim, h_dim)
+        self.training = True
+        self.router = LSTMAE(in_dim, h_dim)
+        self.fc = torch.nn.Linear(h_dim + in_dim, num_states)
+        self.predictors = torch.nn.Linear(h_dim, self.num_states)
+
+    def forward(self, x):
+        emb = self.feature_extractor(x) # (n, K, fea_dim)->(n, h_dim)
+        # input: (batch, hidden)
+        _, x_hat = self.router(x)  # (n, K, fea_dim)->(n, K, h_dim)
+        recon_err = (x_hat - x).pow(2).mean(dim=1)   # ->(n, fea_dim)
+        preds = self.predictors(emb) # preds: (batch, 3)
+
+        if self.num_states == 1:
+            return preds.squeeze(-1), preds, None
+        # prob: (batch, num_state)
+        rot_out = self.fc(torch.cat([emb, recon_err], dim=-1))
+
+        # ---- 逐样本重构误差与 batch 平均值比较 ----
+        per_sample_err = recon_err.mean(dim=-1)    # (n,)
+        batch_mean_err = per_sample_err.mean()     # 标量
+        high_re_mask = (per_sample_err > batch_mean_err).to(preds.dtype)  # (n,) 0/1
+
+        # ---- 路由概率 ----
+        if self.training:
+            prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False)
+        else:
+            prob = F.softmax(rot_out, dim=-1)
+
+        # ---- 软预测：probs 加权和 ----
+        soft_pred = (preds * prob).sum(dim=-1)     # (n,)
+
+        # ---- 硬预测：argmax + 直通估计 ----
+        hard_idx = prob.argmax(dim=-1, keepdim=True)              # (n, 1)
+        hard_onehot = torch.zeros_like(prob).scatter_(1, hard_idx, 1.0)
+        hard_ste = hard_onehot - prob.detach() + prob             # 直通
+        hard_pred = (preds * hard_ste).sum(dim=-1)                # (n,)
+        final_pred = hard_pred * (1.0 - high_re_mask) + soft_pred * high_re_mask
         return final_pred, preds, prob

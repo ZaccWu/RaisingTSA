@@ -49,3 +49,47 @@ def pairwise_ranking_loss(pred, target, min_target_diff=0.1):
 
     # softplus(-x) = log(1 + exp(-x))：x 越大损失越小
     return F.softplus(-pred_diff[valid]).mean()
+
+def topk_recall(y_bin, y_pred, k, group_size):
+    assert y_bin.shape[0] % group_size == 0, \
+        f"N_total={y_bin.shape[0]} 不能被 group_size={group_size} 整除"
+    n_groups = y_bin.shape[0] // group_size
+    y_bin_g  = y_bin.view(n_groups, group_size)
+    y_pred_g = y_pred.view(n_groups, group_size)
+    k = min(k, group_size)
+
+    _, topk_idx = torch.topk(y_pred_g, k, dim=1)
+    topk_labels = y_bin_g.gather(1, topk_idx)
+
+    n_pos = y_bin_g.sum(dim=1)
+    hits  = topk_labels.sum(dim=1)
+    valid = n_pos > 0
+    if not valid.any():
+        return 0.0
+    recalls = hits[valid] / n_pos[valid]
+    return float(recalls.mean().item())
+
+
+def ndcg_at_k(y_bin, y_pred, k, group_size, use_exp_gain=True):
+    assert y_bin.shape[0] % group_size == 0, \
+        f"N_total={y_bin.shape[0]} 不能被 group_size={group_size} 整除"
+    n_groups = y_bin.shape[0] // group_size
+    y_bin_g  = y_bin.view(n_groups, group_size).float()
+    y_pred_g = y_pred.view(n_groups, group_size)
+    k = min(k, group_size)
+
+    _, topk_idx = torch.topk(y_pred_g, k, dim=1)
+    gains = y_bin_g.gather(1, topk_idx)
+    if use_exp_gain:
+        gains = 2.0 ** gains - 1.0
+    discounts = 1.0 / torch.log2(torch.arange(2, k + 2, dtype=torch.float32))
+    dcg = (gains * discounts).sum(dim=1)
+
+    sorted_true, _ = torch.sort(y_bin_g, dim=1, descending=True)
+    ideal_gains = sorted_true[:, :k]
+    if use_exp_gain:
+        ideal_gains = 2.0 ** ideal_gains - 1.0
+    idcg = (ideal_gains * discounts).sum(dim=1)
+
+    ndcg = torch.where(idcg > 0, dcg / idcg, torch.zeros_like(dcg))
+    return float(ndcg.mean().item())
