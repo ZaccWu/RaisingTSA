@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import copy
-from RaiseModel import Raise, RaiseSep, sinkhorn, partial_sinkhorn
+from RaiseModel import Raise, RaiseSep, sinkhorn, partial_sinkhorn, LSTMHA
 from load_data import LoadAliDt
 from util.evaluate import transfer_pred, ev_loss, pairwise_ranking_loss, cal_ndcgK
 from sklearn.metrics import roc_auc_score, average_precision_score
@@ -20,14 +20,15 @@ from sklearn.metrics import classification_report
 
 def _configTrainArgs():
     parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
-    parser.add_argument('--model', type=str, help='sinkhorn type', default='rai') # 'rai', 'raisp'
+
+    parser.add_argument('--model', type=str, help='model name', default='raisp') # 'rai', 'raisp', 'lstmha'
+
     parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
     parser.add_argument('--rho', type=float, help='rho', default=0.99) # default 0.99
     parser.add_argument('--tai', type=float, default=0.1, help='entropic tai for partial OT') # default 0.1
     parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=64) # 64
 
-    parser.add_argument('--beta', type=float, help='beta', default=1) # default 1
     parser.add_argument('--lamb', type=float, help='rho', default=1) # default 1
     parser.add_argument('--lr', type=float, help='learning rate', default=0.01) # default 0.01
 
@@ -52,30 +53,40 @@ def transfer_pred(out, threshold):
     return pred
 
 @torch.no_grad()
-def evalInBatches(model, data_loader, device, return_loss=True):
+def evalInBatches(args, model, data_loader, device, return_loss=True):
     model.eval()
     preds_list, y_list, y_bin_list, prds_list = [], [], [], []
     loss_sum, n_sample = 0.0, 0
     for x_b, y_b in data_loader:
         x_b = x_b.to(device)
         y_b = y_b.to(device)
-        pred, _, prob = model(x_b)
-        prd_select = prob.argmax(dim=-1)
 
-        if return_loss:
-            loss_b = ev_loss(pred, y_b)
-            loss_sum += loss_b.item() * x_b.size(0)
-            n_sample += x_b.size(0)
+        if args.model in ['rai', 'raisp']:
+            pred, _, prob = model(x_b)
+            prd_select = prob.argmax(dim=-1).detach().cpu()
+
+            if return_loss:
+                loss_b = ev_loss(pred, y_b)
+                loss_sum += loss_b.item() * x_b.size(0)
+                n_sample += x_b.size(0)
+        
+        else:
+            pred = model(x_b)
+            prd_select = torch.zeros_like(pred)
 
         preds_list.append(pred.detach().cpu())
         y_list.append(y_b.detach().cpu())
-        prds_list.append(prd_select.detach().cpu())
+        prds_list.append(prd_select)
 
     preds_all = torch.cat(preds_list, dim=0)
     y_all = torch.cat(y_list, dim=0)
     prds_all = torch.cat(prds_list, dim=0)
     avg_loss = (loss_sum / max(n_sample, 1)) if return_loss else None
     return preds_all, y_all, prds_all, avg_loss
+
+
+
+
 
 def train(args):
     device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() else 'cpu')
@@ -89,6 +100,8 @@ def train(args):
         model = Raise(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
     elif args.model == 'raisp':
         model = RaiseSep(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
+    elif args.model == 'lstmha':
+        model = LSTMHA(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
     else:
         assert ValueError('Model not specified')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -103,29 +116,34 @@ def train(args):
         for batch_idx, (x_b, y_b) in enumerate(trDt_loader):
             x_b, y_b = x_b.to(device), y_b.to(device)
             optimizer.zero_grad()
-            pred, all_preds, prob = model(x_b) # all_preds, prob: (B, num_states)
-            cla_loss = ev_loss(pred, y_b)
-            #rank_loss = pairwise_ranking_loss(pred, y_b)
-            pred_loss = cla_loss #+ args.beta * rank_loss
 
-            if prob is not None:
-                L = ev_loss(all_preds, y_b)          # (B, num_states)
-                L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
+            if args.model in ['rai', 'raisp']:
+                pred, all_preds, prob = model(x_b) # all_preds, prob: (B, num_states)
+                pred_loss = ev_loss(pred, y_b)
+                if prob is not None:
+                    L = ev_loss(all_preds, y_b)          # (B, num_states)
+                    L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
+                    if args.ot == 'full':
+                        P = sinkhorn(-L, epsilon=0.1) 
+                    else:
+                        P = partial_sinkhorn(-L, epsilon=0.1, tai=args.tai)
+                    lamb = args.lamb * (args.rho ** global_step) # lamb=0 still have multi-expert
+                    ot_loss = prob.log().mul(P).sum(dim=-1).mean()
+                    loss = pred_loss - lamb * ot_loss
 
-                if args.ot == 'full':
-                    P = sinkhorn(-L, epsilon=0.1) 
-                else:
-                    P = partial_sinkhorn(-L, epsilon=0.1, tai=args.tai)
-                lamb = args.lamb * (args.rho ** global_step) # lamb=0 still have multi-expert
-                ot_loss = prob.log().mul(P).sum(dim=-1).mean()
-                loss = pred_loss - lamb * ot_loss
+            elif args.model in ['lstmha']:
+                pred = model(x_b) # pred: (B, num_states)
+                loss = ev_loss(pred, y_b)
+            
+            else:
+                assert ValueError('Model not specified')
+
+
             loss.backward()
             optimizer.step()
         
         model.training = False
-        va_pred, va_y, va_prds, va_loss = evalInBatches(model, vaDt_loader, device)
-        # group_size = data_loader.num_stock  # 每个时间步的股票数
-        # NK = int(group_size*0.1)
+        va_pred, va_y, va_prds, va_loss = evalInBatches(args, model, vaDt_loader, device)
         va_rec_r2 = transfer_pred(va_pred, torch.quantile(va_pred, 0.9, dim=None, keepdim=False))
 
 
@@ -144,7 +162,8 @@ def train(args):
     
     model.training = False
     model.load_state_dict(best_model_state)
-    ts_pred, ts_y, ts_prds, _ = evalInBatches(model, tsDt_loader, device, return_loss=False)
+    ts_pred, ts_y, ts_prds, _ = evalInBatches(args, model, tsDt_loader, device, return_loss=False)
+
 
     ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.95, dim=None, keepdim=False))
     ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9, dim=None, keepdim=False))
@@ -165,7 +184,9 @@ def train(args):
     r2_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r2.numpy())
     r3_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r3.numpy())
 
-    print('Best epoch: ', best_epoch_id, 'Predictors: ', pd.Series(ts_prds.numpy()).value_counts())
+    print('Best epoch: ', best_epoch_id)
+    if args.model in ['rai', 'raisp']:
+        print('Predictors: ', pd.Series(ts_prds.numpy()).value_counts())
     print('r1_rec {:3f},'.format(r1_rec),
         'r2_rec {:3f},'.format(r2_rec),
         'r3_rec {:3f},'.format(r3_rec),

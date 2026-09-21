@@ -45,33 +45,54 @@ def shoot_infs(inp_tensor):
                 inp_tensor[ind[0]] = m
     return inp_tensor
 
-class LSTMHA(torch.nn.Module):
-    def __init__(self, in_dim, h_dim,
-                 lstm_num_layers=2, dropout=0.2):
-        """
-        Receive: batch_size, seq_len, input_size
-        """
+
+
+
+
+class LSTMTATT(torch.nn.Module):
+    def __init__(self, lag, in_dim, h_dim, out_dim):
         super().__init__()
-        self.lstm = torch.nn.LSTM(input_size=in_dim,
-                            hidden_size=h_dim,
-                            num_layers=lstm_num_layers,
-                            batch_first=True,
-                            bidirectional=False,
-                            dropout=dropout)
+        self.dropout = 0.2
+        self.LSTM = torch.nn.LSTM(in_dim, h_dim, 2, batch_first=True, bidirectional=False, dropout=self.dropout)
+        self.W = torch.nn.Parameter(torch.zeros(lag, h_dim))
+        torch.nn.init.xavier_normal_(self.W.data)
+        self.fc = torch.nn.Sequential(torch.nn.Linear(h_dim, out_dim), torch.nn.LeakyReLU(True))
+
+    def forward(self, x):
+        ht, (hn, cn) = self.LSTM(x)
+        ht_W = ht.mul(self.W)
+        ht_W = torch.sum(ht_W, dim=2)
+        att = F.softmax(ht_W, dim=1)
+        t_att = att.unsqueeze(dim=1)
+        att_ht = torch.bmm(t_att, ht)
+        z_out = self.fc(att_ht)
+        if z_out.shape[-1] == 1:
+            z_out = z_out.squeeze(1)
+        return z_out
+
+
+
+
+class LSTMHA(torch.nn.Module):
+    def __init__(self, in_dim, h_dim, out_dim):
+        super().__init__()
+        self.dropout = 0.2
+        self.lstm = torch.nn.LSTM(in_dim, h_dim, 2, batch_first=True, bidirectional=False, dropout=self.dropout)
         self.attn_W = torch.nn.Linear(h_dim, h_dim, bias=True)
         self.attn_v = torch.nn.Linear(h_dim, 1, bias=False)
+        self.fc = torch.nn.Sequential(torch.nn.Linear(h_dim, out_dim), torch.nn.LeakyReLU(True))
 
     def forward(self, x):
         outputs, _ = self.lstm(x)   # outputs: (batch, seq_len, hidden_size)
-
         # (B, K, H) -> (B, K, 1)
         score = self.attn_v(torch.tanh(self.attn_W(outputs)))   # (B, K, 1)
         alpha = torch.softmax(score, dim=1)                     # (B, K, 1)
-        out   = (outputs * alpha).sum(dim=1)                    # (B, H)
-        return out
+        z_out   = (outputs * alpha).sum(dim=1)                    # (B, H)
+        z_out = self.fc(z_out)       # (B, H)
+        if z_out.shape[-1] == 1:
+            z_out = z_out.squeeze(1)
+        return z_out
 
-        #outputs = outputs.transpose(1,2)  # (batch*stock_num, hidden_size, window_size_K)
-        #return outputs[:,-1,:]
 
 
 class LSTMAE(torch.nn.Module):
@@ -97,7 +118,9 @@ class Raise(torch.nn.Module):
         super().__init__()
         self.num_states = num_states
         self.gstai = 1
-        self.feature_extractor = LSTMHA(in_dim, h_dim)
+
+        self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
+
         self.training = True
         self.router = LSTMAE(in_dim, h_dim)
         self.fc = torch.nn.Linear(h_dim + in_dim, num_states)
@@ -132,7 +155,9 @@ class RaiseSep(torch.nn.Module):
         super().__init__()
         self.num_states = num_states
         self.gstai = 1
-        self.feature_extractor = LSTMHA(in_dim, h_dim)
+
+        self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
+
         self.training = True
         self.router = LSTMAE(in_dim, h_dim)
         self.fc = torch.nn.Linear(h_dim + in_dim, num_states)
