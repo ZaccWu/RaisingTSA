@@ -33,8 +33,6 @@ def preprocessAliDt(df, tr_len):
     all_stock_feature = np.array(all_stock_feature)  # (stock_num, time_step, feature_dim)
     all_stock_sales = np.array(all_stock_sales).transpose((1, 0))  # -> (time_step, stock_num)
     all_stock_feature_norm = normFeatureWise(all_stock_feature, tr_len)
-
-    
     return all_stock_feature_norm, all_stock_sales
 
 def getDv(all_stock_sales, time_len, num_stock, tau):

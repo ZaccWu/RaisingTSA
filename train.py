@@ -20,7 +20,7 @@ from sklearn.metrics import classification_report
 
 def _configTrainArgs():
     parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
-
+    parser.add_argument('--model', type=str, help='sinkhorn type', default='rai') # 'rai', 'raisp'
     parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
     parser.add_argument('--rho', type=float, help='rho', default=0.99) # default 0.99
@@ -85,7 +85,12 @@ def train(args):
     vaDt_loader = DataLoader(vaDt, batch_size=args.bs, shuffle=False)
     tsDt_loader = DataLoader(tsDt, batch_size=args.bs, shuffle=False)
 
-    model = RaiseSep(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
+    if args.model == 'rai':
+        model = Raise(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
+    elif args.model == 'raisp':
+        model = RaiseSep(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
+    else:
+        assert ValueError('Model not specified')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     global_step = -1
@@ -127,11 +132,6 @@ def train(args):
 
         rec_val = classification_report(va_y.numpy(), va_rec_r2.numpy(), target_names=['class0', 'class1'],
                                 output_dict=True)['class1']['recall']
-
-        # va_recall_k = topk_recall(va_y_bin, va_pred, NK, group_size)
-        # va_ndcg_k  = ndcg_at_k(va_y_bin, va_pred, NK, group_size)
-        # va_recall_k = topk_recall(va_y_bin, va_pred, NK, group_size)
-        # va_ndcg_k  = ndcg_at_k(va_y_bin, va_pred, NK, group_size)
         va_score = rec_val
 
         print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
@@ -203,7 +203,7 @@ if __name__ == "__main__":
         repeat_res['r3_ndcg'].append(ts_res['r3_ndcg'])
         repeat_res['auc'].append(ts_res['auc'])
 
-    print('All results | ns: ', args.ns, 'lamb', args.lamb)
+    print('All results | model: ', args.model,  'ns: ', args.ns, 'lamb', args.lamb)
     print('AUC {:.4f} ({:.3f}), '.format(np.mean(repeat_res['auc']), np.std(repeat_res['auc'])),
           ' R@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_rec']), np.std(repeat_res['r1_rec'])),
           ' R@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_rec']), np.std(repeat_res['r2_rec'])),
