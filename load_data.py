@@ -33,6 +33,8 @@ def preprocessAliDt(df, tr_len):
     all_stock_feature = np.array(all_stock_feature)  # (stock_num, time_step, feature_dim)
     all_stock_sales = np.array(all_stock_sales).transpose((1, 0))  # -> (time_step, stock_num)
     all_stock_feature_norm = normFeatureWise(all_stock_feature, tr_len)
+
+    
     return all_stock_feature_norm, all_stock_sales
 
 def getDv(all_stock_sales, time_len, num_stock, tau):
@@ -40,8 +42,8 @@ def getDv(all_stock_sales, time_len, num_stock, tau):
     for i in range(time_len - tau):
         all_stock_return[i] = np.sum(all_stock_sales[i: i + tau], axis=0) / (np.sum(all_stock_sales[i-tau: i], axis=0) + np.ones(all_stock_sales[i].shape))  ## avoid zero
         all_stock_dv, all_stock_dvclass = np.array(all_stock_return.copy()), np.array(all_stock_return.copy())
-        all_stock_dvclass[all_stock_return < 1] = 0
-        all_stock_dvclass[all_stock_return >= 1] = 1
+        all_stock_dvclass[all_stock_return < 2] = 0
+        all_stock_dvclass[all_stock_return >= 2] = 1
         all_stock_dv = np.log(all_stock_dv+1)
     return all_stock_dv, all_stock_dvclass
 
@@ -61,7 +63,7 @@ class LoadAliDt():
 
     def loadSamples(self, date, type='clas'):
         features = self.all_stock_feature[:, date:date + self.K, :] # process feature (N, time_step, feature_dim)
-        labels = self.all_stock_dv[date+self.K, :].T # -> (N, time_step)
+        labels = self.all_stock_dvclass[date+self.K, :].T # -> (N, time_step)
         return features, labels
     
     def loadTrainTest(self):

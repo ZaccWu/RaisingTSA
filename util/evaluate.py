@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import numpy as np
 
 def focal_loss(pred, y, reduction = 'mean', alpha=0.75, gamma=2.0):
     # pred 为 logits
@@ -14,6 +15,26 @@ def focal_loss(pred, y, reduction = 'mean', alpha=0.75, gamma=2.0):
         return loss.mean() # final prediction
     else:
         return loss # loss, matrix
+
+def ev_loss(pred, y):  
+    EPS = 1e-15
+    # gamma=1.0 version
+
+    prop_0 = len((1-y).nonzero())  # label = 0
+    prop_1 = len(y.nonzero())      # label = 1
+    pred_score_sigmoid = torch.sigmoid(pred)
+
+    if y.shape != pred.shape:
+        y = y[:, None].expand_as(pred).contiguous()
+        # 逐元素计算正负样本损失，并按照类别比例加权
+        pos_loss = -torch.log(pred_score_sigmoid + EPS) * (prop_0 / (prop_0 + prop_1)) * y
+        neg_loss = -torch.log(1 - pred_score_sigmoid + EPS) * (prop_1 / (prop_0 + prop_1)) * (1 - y)
+    else:
+        pos_loss = -torch.log(pred_score_sigmoid[y.nonzero()] + EPS).mean() * (prop_0/(prop_0+prop_1))
+        neg_loss = -torch.log(1 - pred_score_sigmoid[(1-y).nonzero()] + EPS).mean() * (prop_1/(prop_0+prop_1))
+
+    loss = pos_loss + neg_loss  # shape: (num_sample, num_predictor)
+    return loss
 
 def transfer_pred(out, threshold):
     pred = out.clone()
@@ -50,46 +71,22 @@ def pairwise_ranking_loss(pred, target, min_target_diff=0.1):
     # softplus(-x) = log(1 + exp(-x))：x 越大损失越小
     return F.softplus(-pred_diff[valid]).mean()
 
-def topk_recall(y_bin, y_pred, k, group_size):
-    assert y_bin.shape[0] % group_size == 0, \
-        f"N_total={y_bin.shape[0]} 不能被 group_size={group_size} 整除"
-    n_groups = y_bin.shape[0] // group_size
-    y_bin_g  = y_bin.view(n_groups, group_size)
-    y_pred_g = y_pred.view(n_groups, group_size)
-    k = min(k, group_size)
+def find_positions_in_vru(list_a, list_b):
+    positions_dict = {}  # 创建一个字典用于存储列B表中每个元素的位置
+    for i, element in enumerate(list_b):
+        positions_dict[element] = i
+    result = []  # 用于存储列表A中每个元素在列表B中的位置
+    for element in list_a:
+        if element in positions_dict:
+            result.append(positions_dict[element])
+    return result
 
-    _, topk_idx = torch.topk(y_pred_g, k, dim=1)
-    topk_labels = y_bin_g.gather(1, topk_idx)
-
-    n_pos = y_bin_g.sum(dim=1)
-    hits  = topk_labels.sum(dim=1)
-    valid = n_pos > 0
-    if not valid.any():
-        return 0.0
-    recalls = hits[valid] / n_pos[valid]
-    return float(recalls.mean().item())
-
-
-def ndcg_at_k(y_bin, y_pred, k, group_size, use_exp_gain=True):
-    assert y_bin.shape[0] % group_size == 0, \
-        f"N_total={y_bin.shape[0]} 不能被 group_size={group_size} 整除"
-    n_groups = y_bin.shape[0] // group_size
-    y_bin_g  = y_bin.view(n_groups, group_size).float()
-    y_pred_g = y_pred.view(n_groups, group_size)
-    k = min(k, group_size)
-
-    _, topk_idx = torch.topk(y_pred_g, k, dim=1)
-    gains = y_bin_g.gather(1, topk_idx)
-    if use_exp_gain:
-        gains = 2.0 ** gains - 1.0
-    discounts = 1.0 / torch.log2(torch.arange(2, k + 2, dtype=torch.float32))
-    dcg = (gains * discounts).sum(dim=1)
-
-    sorted_true, _ = torch.sort(y_bin_g, dim=1, descending=True)
-    ideal_gains = sorted_true[:, :k]
-    if use_exp_gain:
-        ideal_gains = 2.0 ** ideal_gains - 1.0
-    idcg = (ideal_gains * discounts).sum(dim=1)
-
-    ndcg = torch.where(idcg > 0, dcg / idcg, torch.zeros_like(dcg))
-    return float(ndcg.mean().item())
+def cal_ndcgK(vcu, vru):
+    # vru是正序的排名(按照推荐指数)
+    position = find_positions_in_vru(vcu, vru)
+    dcg = np.sum([1/np.log2(2+i) for i in position])
+    inter_len = len(set(vru) & set(vcu))
+    idcg = np.sum([1/np.log2(2+i) for i in range(inter_len)])
+    if idcg == 0:
+        return 0
+    return dcg/idcg
