@@ -22,6 +22,8 @@ def _configTrainArgs():
     parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
     parser.add_argument('--model', type=str, help='model name', default='trans')
+    # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
+    parser.add_argument('--extractor', type=str, help='model name', default='trans') # only functionable in 'rai' and 'raisp'
 
     parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
@@ -97,9 +99,10 @@ def train(args):
     tsDt_loader = DataLoader(tsDt, batch_size=args.bs, shuffle=False)
 
     if args.model == 'rai':
-        model = Raise(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
+        model = Raise(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns, extractor=args.extractor).to(device)
     elif args.model == 'raisp':
-        model = RaiseSep(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
+        model = RaiseSep(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns, extractor=args.extractor).to(device)
+    
     elif args.model == 'lstm':
         model = LSTM(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
     elif args.model == 'gru':
@@ -232,7 +235,7 @@ if __name__ == "__main__":
         repeat_res['r3_ndcg'].append(ts_res['r3_ndcg'])
         repeat_res['auc'].append(ts_res['auc'])
 
-    print('All results | model: ', args.model,  'ns: ', args.ns, 'lamb', args.lamb)
+    
     print('AUC {:.4f} ({:.3f}), '.format(np.mean(repeat_res['auc']), np.std(repeat_res['auc'])),
           ' R@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_rec']), np.std(repeat_res['r1_rec'])),
           ' R@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_rec']), np.std(repeat_res['r2_rec'])),
@@ -240,5 +243,7 @@ if __name__ == "__main__":
           ' N@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_ndcg']), np.std(repeat_res['r1_ndcg'])),
           ' N@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_ndcg']), np.std(repeat_res['r2_ndcg'])),
           ' N@3 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r3_ndcg']), np.std(repeat_res['r3_ndcg'])),)
-    
+    print('All results | model: ', args.model,  'ns: ', args.ns, 'lamb', args.lamb)
+    if args.model in ['rai', 'raisp']:
+        print('Extractor: ', args.extractor)
 

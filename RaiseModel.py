@@ -168,12 +168,23 @@ class LSTMAE(torch.nn.Module):
 
 
 class Raise(torch.nn.Module):
-    def __init__(self, in_dim, h_dim, num_states=3):
+    def __init__(self, in_dim, h_dim, num_states=3, extractor='lstmtatt'):
         super().__init__()
         self.num_states = num_states
         self.gstai = 1
+        if extractor == 'lstm':
+            self.feature_extractor = LSTM(in_dim, h_dim, out_dim=h_dim)
+        elif extractor == 'gru':
+            self.feature_extractor = GRU(in_dim, h_dim, out_dim=h_dim)
+        elif extractor == 'trans':
+            self.feature_extractor = Transformer(30, in_dim, h_dim, out_dim=h_dim)
+        elif extractor == 'lstmha':
+            self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
+        elif extractor == 'lstmtatt':
+            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim)
+        else:
+            raise ValueError('Extractor not specify')
 
-        self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
 
         self.training = True
         self.router = LSTMAE(in_dim, h_dim)
@@ -205,12 +216,22 @@ class Raise(torch.nn.Module):
 
 
 class RaiseSep(torch.nn.Module):
-    def __init__(self, in_dim, h_dim, num_states=3):
+    def __init__(self, in_dim, h_dim, num_states=3, extractor='lstmtatt'):
         super().__init__()
         self.num_states = num_states
         self.gstai = 1
-
-        self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
+        if extractor == 'lstm':
+            self.feature_extractor = LSTM(in_dim, h_dim, out_dim=h_dim)
+        elif extractor == 'gru':
+            self.feature_extractor = GRU(in_dim, h_dim, out_dim=h_dim)
+        elif extractor == 'trans':
+            self.feature_extractor = Transformer(30, in_dim, h_dim, out_dim=h_dim)
+        elif extractor == 'lstmha':
+            self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
+        elif extractor == 'lstmtatt':
+            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim)
+        else:
+            raise ValueError('Extractor not specify')
 
         self.training = True
         self.router = LSTMAE(in_dim, h_dim)
