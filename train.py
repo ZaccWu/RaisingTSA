@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import copy
-from RaiseModel import Raise, RaiseSep, sinkhorn, partial_sinkhorn, LSTMHA
+from RaiseModel import Raise, RaiseSep, sinkhorn, partial_sinkhorn, LSTM, GRU, Transformer, LSTMHA, LSTMTATT
 from load_data import LoadAliDt
 from util.evaluate import transfer_pred, ev_loss, pairwise_ranking_loss, cal_ndcgK
 from sklearn.metrics import roc_auc_score, average_precision_score
@@ -20,8 +20,8 @@ from sklearn.metrics import classification_report
 
 def _configTrainArgs():
     parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
-
-    parser.add_argument('--model', type=str, help='model name', default='raisp') # 'rai', 'raisp', 'lstmha'
+    # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
+    parser.add_argument('--model', type=str, help='model name', default='trans')
 
     parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
@@ -100,8 +100,16 @@ def train(args):
         model = Raise(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
     elif args.model == 'raisp':
         model = RaiseSep(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, num_states=args.ns).to(device)
+    elif args.model == 'lstm':
+        model = LSTM(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
+    elif args.model == 'gru':
+        model = GRU(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
+    elif args.model == 'trans':
+        model = Transformer(lag=30, in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
     elif args.model == 'lstmha':
         model = LSTMHA(in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
+    elif args.model == 'lstmtatt':
+        model = LSTMTATT(lag=30, in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
     else:
         assert ValueError('Model not specified')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -131,7 +139,7 @@ def train(args):
                     ot_loss = prob.log().mul(P).sum(dim=-1).mean()
                     loss = pred_loss - lamb * ot_loss
 
-            elif args.model in ['lstmha']:
+            elif args.model in ['lstm', 'gru', 'trans', 'lstmha', 'lstmtatt']:
                 pred = model(x_b) # pred: (B, num_states)
                 loss = ev_loss(pred, y_b)
             

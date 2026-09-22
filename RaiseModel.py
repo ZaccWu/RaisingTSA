@@ -47,7 +47,62 @@ def shoot_infs(inp_tensor):
 
 
 
+class LSTM(torch.nn.Module):
+    def __init__(self, in_dim, h_dim, out_dim):
+        super().__init__()
+        self.dropout = 0.2
+        self.LSTM = torch.nn.LSTM(in_dim, h_dim, 2, batch_first=True, bidirectional=False, dropout=self.dropout)
+        self.linear = torch.nn.Linear(h_dim, out_dim)
+        self.act = torch.nn.LeakyReLU()
+        self.training = True
+    def forward(self, x):
+        ht, _ = self.LSTM(x)   # ht: (batch*num_stock, K, h_dim)
+        z_out = self.act(self.linear(ht[:,-1,:]))   # z_out: (batch*num_stock, out)
+        if z_out.shape[-1] == 1:
+            z_out = z_out.squeeze(1)
+        return z_out
 
+class GRU(torch.nn.Module):
+    def __init__(self, in_dim, h_dim, out_dim):
+        super().__init__()
+        self.dropout = 0.2
+        self.GRU = torch.nn.GRU(in_dim, h_dim, 2, batch_first=True, bidirectional=False, dropout=self.dropout)
+        self.linear = torch.nn.Linear(h_dim, out_dim)
+        self.act = torch.nn.LeakyReLU()
+        self.training = True
+    def forward(self, x):
+        ht, hn = self.GRU(x)  # ht: (batch*num_stock, K, h_dim)
+        z_out = self.act(self.linear(ht[:, -1, :]))  # z_out: (batch*num_stock, out)
+        if z_out.shape[-1] == 1:
+            z_out = z_out.squeeze(1)
+        return z_out
+
+class Transformer(torch.nn.Module):   # encoder only transformer
+    def __init__(self, lag, in_dim, h_dim, out_dim):
+        super(Transformer, self).__init__()
+        self.fc_in = torch.nn.Linear(in_dim, h_dim)
+        encoder_layer = torch.nn.TransformerEncoderLayer(
+            d_model=h_dim, nhead=2, dim_feedforward=h_dim, dropout=0.2, batch_first=True,
+        )
+        self.transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=2)
+        self.transformer_encoder.apply(self.init_weights)
+        self.positional_encoding = torch.nn.Parameter(torch.zeros(1, lag, h_dim))
+        torch.nn.init.xavier_normal_(self.positional_encoding)
+        self.fc_out = torch.nn.Linear(h_dim, out_dim)
+        self.act = torch.nn.LeakyReLU()
+        self.training = True
+    def forward(self, x):
+        x1 = self.fc_in(x) + self.positional_encoding
+        ht = self.transformer_encoder(x1)  # ht: (batch*num_stock, K, h_dim)
+        z_out = self.act(self.fc_out(ht[:, -1, :])) 
+        if z_out.shape[-1] == 1:
+            z_out = z_out.squeeze(1)
+        return z_out
+    def init_weights(self, module):
+        if isinstance(module, torch.nn.Linear):
+            torch.nn.init.xavier_normal_(module.weight)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
 
 class LSTMTATT(torch.nn.Module):
     def __init__(self, lag, in_dim, h_dim, out_dim):
@@ -64,12 +119,11 @@ class LSTMTATT(torch.nn.Module):
         ht_W = torch.sum(ht_W, dim=2)
         att = F.softmax(ht_W, dim=1)
         t_att = att.unsqueeze(dim=1)
-        att_ht = torch.bmm(t_att, ht)
+        att_ht = torch.bmm(t_att, ht).squeeze(1)
         z_out = self.fc(att_ht)
         if z_out.shape[-1] == 1:
             z_out = z_out.squeeze(1)
         return z_out
-
 
 
 
@@ -175,21 +229,16 @@ class RaiseSep(torch.nn.Module):
         # prob: (batch, num_state)
         rot_out = self.fc(torch.cat([emb, recon_err], dim=-1))
 
-        # ---- 逐样本重构误差与 batch 平均值比较 ----
         per_sample_err = recon_err.mean(dim=-1)    # (n,)
         batch_mean_err = per_sample_err.mean()     # 标量
         high_re_mask = (per_sample_err > batch_mean_err).to(preds.dtype)  # (n,) 0/1
 
-        # ---- 路由概率 ----
         if self.training:
             prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False)
         else:
             prob = F.softmax(rot_out, dim=-1)
 
-        # ---- 软预测：probs 加权和 ----
         soft_pred = (preds * prob).sum(dim=-1)     # (n,)
-
-        # ---- 硬预测：argmax + 直通估计 ----
         hard_idx = prob.argmax(dim=-1, keepdim=True)              # (n, 1)
         hard_onehot = torch.zeros_like(prob).scatter_(1, hard_idx, 1.0)
         hard_ste = hard_onehot - prob.detach() + prob             # 直通
