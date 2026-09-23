@@ -18,13 +18,16 @@ def partial_sinkhorn(Q, epsilon=0.1, tai=0.1, n_iters=20):
         K = torch.exp(Q / epsilon)                          # (num_sample, n_state)
         B, Kd = K.shape
         a = torch.ones(B,  1, device=K.device, dtype=K.dtype)     # (num_sample, 1)
-        b = torch.ones(Kd, 1, device=K.device, dtype=K.dtype)     # (n_state, 1) 
+        nu = torch.ones(Kd, 1, device=K.device, dtype=K.dtype) / Kd
+        b = nu * B               # (n_state, 1)
+        #b = torch.ones(Kd, 1, device=K.device, dtype=K.dtype)     # (n_state, 1) 
         u = torch.ones(B,  1, device=K.device, dtype=K.dtype)     # (num_sample, 1)
         v = torch.ones(Kd, 1, device=K.device, dtype=K.dtype)     # (n_state, 1)  
         for _ in range(n_iters):
             u = (a / (K @ v + 1e-12)).pow(rho)
             v = (b / (K.t() @ u + 1e-12)).pow(rho)
         Q = u * K * v.t() 
+        Q = Q / (Q.sum(dim=1, keepdim=True) + 1e-12)
     return Q
 
 def shoot_infs(inp_tensor):
@@ -185,34 +188,33 @@ class Raise(torch.nn.Module):
         else:
             raise ValueError('Extractor not specify')
 
-
         self.training = True
         self.router = LSTMAE(in_dim, h_dim)
         self.fc = torch.nn.Linear(h_dim + in_dim, num_states)
         self.predictors = torch.nn.Linear(h_dim, self.num_states)
+        self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
         emb = self.feature_extractor(x) # (n, K, fea_dim)->(n, h_dim)
         # input: (batch, hidden)
         _, x_hat = self.router(x)  # (n, K, fea_dim)->(n, K, h_dim)
         recon_err = (x_hat - x).pow(2).mean(dim=1)   # ->(n, fea_dim)
-        preds = self.predictors(emb) # preds: (batch, 3)
+        preds = self.act(self.predictors(emb)) # preds: (batch, 3)
 
         if self.num_states == 1:
-            return preds.squeeze(-1), preds, None
+            return preds.squeeze(-1), preds, None, None
         # prob: (batch, num_state)
         #prob = F.gumbel_softmax(preds, dim=-1, tau=self.gstai, hard=False)
-        rot_out = self.fc(torch.cat([emb, recon_err], dim=-1))
+        rot_out = self.act(self.fc(torch.cat([emb, recon_err], dim=-1)))
 
         if self.training:
             prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False)
             final_pred = (preds * prob).sum(dim=-1)
         else:
-            #prob = F.softmax(preds / self.gstai, dim=-1)
             prob = F.softmax(rot_out, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
         # final_pred: (batch)
-        return final_pred, preds, prob
+        return final_pred, preds, prob, None
 
 
 class RaiseSep(torch.nn.Module):
@@ -237,21 +239,25 @@ class RaiseSep(torch.nn.Module):
         self.router = LSTMAE(in_dim, h_dim)
         self.fc = torch.nn.Linear(h_dim + in_dim, num_states)
         self.predictors = torch.nn.Linear(h_dim, self.num_states)
+        self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
         emb = self.feature_extractor(x) # (n, K, fea_dim)->(n, h_dim)
         # input: (batch, hidden)
         _, x_hat = self.router(x)  # (n, K, fea_dim)->(n, K, h_dim)
         recon_err = (x_hat - x).pow(2).mean(dim=1)   # ->(n, fea_dim)
-        preds = self.predictors(emb) # preds: (batch, 3)
+        preds = self.act(self.predictors(emb)) # preds: (batch, 3)
 
-        if self.num_states == 1:
-            return preds.squeeze(-1), preds, None
+
         # prob: (batch, num_state)
-        rot_out = self.fc(torch.cat([emb, recon_err], dim=-1))
+        rot_out = self.act(self.fc(torch.cat([emb, recon_err], dim=-1)))
 
         per_sample_err = recon_err.mean(dim=-1)    # (n,)
         batch_mean_err = per_sample_err.mean()     # 标量
+
+        if self.num_states == 1:
+            return preds.squeeze(-1), preds, None, batch_mean_err
+
         high_re_mask = (per_sample_err > batch_mean_err).to(preds.dtype)  # (n,) 0/1
 
         if self.training:
@@ -265,4 +271,4 @@ class RaiseSep(torch.nn.Module):
         hard_ste = hard_onehot - prob.detach() + prob             # 直通
         hard_pred = (preds * hard_ste).sum(dim=-1)                # (n,)
         final_pred = hard_pred * (1.0 - high_re_mask) + soft_pred * high_re_mask
-        return final_pred, preds, prob
+        return final_pred, preds, prob, batch_mean_err

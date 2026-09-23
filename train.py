@@ -24,9 +24,9 @@ def _configTrainArgs():
 
     parser.add_argument('--data', type=str, help='load data', default='fs')
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--model', type=str, help='model name', default='trans')
+    parser.add_argument('--model', type=str, help='model name', default='raisp')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--extractor', type=str, help='model name', default='trans') # only functionable in 'rai' and 'raisp'
+    parser.add_argument('--extractor', type=str, help='model name', default='lstmtatt') # only functionable in 'rai' and 'raisp'
 
     parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
@@ -67,7 +67,7 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
         y_b = y_b.to(device)
 
         if args.model in ['rai', 'raisp']:
-            pred, _, prob = model(x_b)
+            pred, _, prob, _ = model(x_b)
             prd_select = prob.argmax(dim=-1).detach().cpu()
         
         else:
@@ -131,7 +131,7 @@ def train(args):
             optimizer.zero_grad()
 
             if args.model in ['rai', 'raisp']:
-                pred, all_preds, prob = model(x_b) # all_preds, prob: (B, num_states)
+                pred, all_preds, prob, recon_loss = model(x_b) # all_preds, prob: (B, num_states)
                 pred_loss = ev_loss(pred, y_b)
                 if prob is not None:
                     L = ev_loss(all_preds, y_b)          # (B, num_states)
@@ -143,6 +143,13 @@ def train(args):
                     lamb = args.lamb * (args.rho ** global_step) # lamb=0 still have multi-expert
                     ot_loss = prob.log().mul(P).sum(dim=-1).mean()
                     loss = pred_loss - lamb * ot_loss
+                else:
+                    loss = pred_loss
+                
+                if args.model == 'raisp':
+                    loss += 0.1 * recon_loss
+                
+                #print(pred_loss.detach(), -ot_loss.detach(), recon_loss.detach())
 
             elif args.model in ['lstm', 'gru', 'trans', 'lstmha', 'lstmtatt']:
                 pred = model(x_b) # pred: (B, num_states)
