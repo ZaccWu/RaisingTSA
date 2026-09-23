@@ -13,6 +13,7 @@ from tqdm import tqdm
 import copy
 from RaiseModel import Raise, RaiseSep, sinkhorn, partial_sinkhorn, LSTM, GRU, Transformer, LSTMHA, LSTMTATT
 from load_data import LoadAliDt
+from load_data_dy import LoadFmcgDt
 from util.evaluate import transfer_pred, ev_loss, pairwise_ranking_loss, cal_ndcgK
 from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import classification_report
@@ -20,6 +21,8 @@ from sklearn.metrics import classification_report
 
 def _configTrainArgs():
     parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
+
+    parser.add_argument('--data', type=str, help='load data', default='fs')
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
     parser.add_argument('--model', type=str, help='model name', default='trans')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
@@ -66,15 +69,14 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
         if args.model in ['rai', 'raisp']:
             pred, _, prob = model(x_b)
             prd_select = prob.argmax(dim=-1).detach().cpu()
-
-            if return_loss:
-                loss_b = ev_loss(pred, y_b)
-                loss_sum += loss_b.item() * x_b.size(0)
-                n_sample += x_b.size(0)
         
         else:
             pred = model(x_b)
             prd_select = torch.zeros_like(pred)
+        
+        loss_b = ev_loss(pred, y_b)
+        loss_sum += loss_b.item() * x_b.size(0)
+        n_sample += x_b.size(0)
 
         preds_list.append(pred.detach().cpu())
         y_list.append(y_b.detach().cpu())
@@ -87,12 +89,12 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
     return preds_all, y_all, prds_all, avg_loss
 
 
-
-
-
 def train(args):
     device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() else 'cpu')
-    data_loader = LoadAliDt()
+    if args.data == 'ali':
+        data_loader = LoadAliDt()
+    else:
+        data_loader = LoadFmcgDt(product=args.data)
     trDt, vaDt, tsDt = data_loader.loadTrainTest()
     trDt_loader = DataLoader(trDt, batch_size=args.bs, shuffle=True)
     vaDt_loader = DataLoader(vaDt, batch_size=args.bs, shuffle=False)
@@ -162,7 +164,6 @@ def train(args):
         rec_val = classification_report(va_y.numpy(), va_rec_r2.numpy(), target_names=['class0', 'class1'],
                                 output_dict=True)['class1']['recall']
         va_score = rec_val
-
         print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
         #print('Predictors: ', pd.Series(va_prds.numpy()).value_counts())
         if va_score > best_va_score:
@@ -243,7 +244,7 @@ if __name__ == "__main__":
           ' N@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_ndcg']), np.std(repeat_res['r1_ndcg'])),
           ' N@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_ndcg']), np.std(repeat_res['r2_ndcg'])),
           ' N@3 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r3_ndcg']), np.std(repeat_res['r3_ndcg'])),)
-    print('All results | model: ', args.model,  'ns: ', args.ns, 'lamb', args.lamb)
+    print('All results | data: ', args.data, 'model: ', args.model,  'ns: ', args.ns, 'lamb', args.lamb)
     if args.model in ['rai', 'raisp']:
         print('Extractor: ', args.extractor)
 
