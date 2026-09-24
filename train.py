@@ -68,8 +68,10 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
 
         if args.model in ['rai', 'raisp']:
             pred, _, prob, _ = model(x_b)
-            prd_select = prob.argmax(dim=-1).detach().cpu()
-        
+            if prob is not None:
+                prd_select = prob.argmax(dim=-1).detach().cpu()
+            else:
+                prd_select = torch.zeros_like(pred)
         else:
             pred = model(x_b)
             prd_select = torch.zeros_like(pred)
@@ -205,7 +207,7 @@ def train(args):
 
     print('Best epoch: ', best_epoch_id)
     if args.model in ['rai', 'raisp']:
-        print('Predictors: ', pd.Series(ts_prds.numpy()).value_counts())
+        print('Predictors: ', pd.Series(ts_prds.cpu().numpy()).value_counts())
     print('r1_rec {:3f},'.format(r1_rec),
         'r2_rec {:3f},'.format(r2_rec),
         'r3_rec {:3f},'.format(r3_rec),
