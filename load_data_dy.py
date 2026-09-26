@@ -148,6 +148,8 @@ if __name__ == '__main__':
     print(trDt.y.shape, vaDt.y.shape, tsDt.y.shape) # [337144], [99160], [198320]
 
     print(pd.Series(dataLoader.all_stock_dvclass.flatten()).value_counts())
+    #print(dataLoader.all_stock_dv)
+
 
 
 

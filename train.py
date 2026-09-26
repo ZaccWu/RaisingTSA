@@ -149,7 +149,7 @@ def train(args):
                     loss = pred_loss
                 
                 if args.model == 'raisp':
-                    loss += 0.1 * recon_loss
+                    loss += 0.01 * recon_loss
                 
                 #print(pred_loss.detach(), -ot_loss.detach(), recon_loss.detach())
 
