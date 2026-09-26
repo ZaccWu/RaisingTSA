@@ -65,7 +65,7 @@ class LSTM(torch.nn.Module):
             z_out = self.act(z_out)
         if z_out.shape[-1] == 1:
             z_out = z_out.squeeze(1)
-        return z_out
+        return z_out, ht
 
 class GRU(torch.nn.Module):
     def __init__(self, in_dim, h_dim, out_dim):
@@ -82,7 +82,7 @@ class GRU(torch.nn.Module):
             z_out = self.act(z_out)
         if z_out.shape[-1] == 1:
             z_out = z_out.squeeze(1)
-        return z_out
+        return z_out, ht
 
 class Transformer(torch.nn.Module):   # encoder only transformer
     def __init__(self, lag, in_dim, h_dim, out_dim):
@@ -106,7 +106,7 @@ class Transformer(torch.nn.Module):   # encoder only transformer
             z_out = self.act(z_out)
         if z_out.shape[-1] == 1:
             z_out = z_out.squeeze(1)
-        return z_out
+        return z_out, ht
     def init_weights(self, module):
         if isinstance(module, torch.nn.Linear):
             torch.nn.init.xavier_normal_(module.weight)
@@ -135,7 +135,7 @@ class LSTMTATT(torch.nn.Module):
             z_out = self.act(z_out)
         if z_out.shape[-1] == 1:
             z_out = z_out.squeeze(1)
-        return z_out
+        return z_out, ht
 
 
 
@@ -160,24 +160,19 @@ class LSTMHA(torch.nn.Module):
             z_out = self.act(z_out)
         if z_out.shape[-1] == 1:
             z_out = z_out.squeeze(1)
-        return z_out
+        return z_out, outputs
 
 
+class Decoder(torch.nn.Module):
+    def __init__(self, in_dim, hd_dim, out_dim):
+        super(Decoder, self).__init__()
+        self.LSTM = torch.nn.LSTM(in_dim, hd_dim, 2, batch_first=True, bidirectional=False)
+        self.dll = torch.nn.Linear(hd_dim, out_dim)
+    def forward(self, emb):
+        enc_seq, (hn, cn) = self.LSTM(emb) # ht: (bs, K, hidden)
+        tsa_pred =self.dll(enc_seq) # tsa_pred: (bs, K, out_dim)
+        return tsa_pred
 
-class LSTMAE(torch.nn.Module):
-    def __init__(self, in_dim, h_dim):
-        super().__init__()
-        self.encoder = torch.nn.LSTM(in_dim, h_dim, num_layers=1,
-                                     batch_first=True, bidirectional=False)
-        self.decoder = torch.nn.LSTM(h_dim, in_dim, num_layers=1,
-                                     batch_first=True, bidirectional=False)
-
-    def forward(self, x):
-        # x: (B, K, F)
-        enc_seq, _ = self.encoder(x)        # (B, K, H)
-        x_hat, _ = self.decoder(enc_seq)  # -> (B, K, F)
-
-        return enc_seq, x_hat
 
 class Raise(torch.nn.Module):
     def __init__(self, in_dim, h_dim, num_states=3, extractor='lstmtatt'):
@@ -203,7 +198,7 @@ class Raise(torch.nn.Module):
         self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
-        emb = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, h_dim)
+        emb, _ = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, h_dim)
         # input: (batch, hidden)
         #preds = self.act(self.predictors(emb)) # preds: (batch, 3)
         preds = self.predictors(emb) # preds: (batch, 3)
@@ -241,22 +236,23 @@ class RaiseSep(torch.nn.Module):
             raise ValueError('Extractor not specify')
 
         self.training = True
-        self.router = LSTMAE(in_dim, 16)
+        self.router = Decoder(in_dim, 16, in_dim)
         #self.fc = torch.nn.Linear(h_dim + in_dim, num_states)
         self.fc = torch.nn.Linear(in_dim, num_states)
         self.predictors = torch.nn.Linear(h_dim, self.num_states)
         self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
-        emb = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, h_dim)
+        emb, _ = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, h_dim)
         # input: (batch, hidden)
-        _, x_hat = self.router(x)  # (n, K, fea_dim)->(n, K, h_dim)
+        x_hat = self.router(x)  # (n, K, fea_dim)->(n, K, h_dim)
         recon_err = (x_hat - x).pow(2).mean(dim=1)   # ->(n, fea_dim)
         preds = self.act(self.predictors(emb)) # preds: (batch, 3)
 
 
         # prob: (batch, num_state)
         #rot_out = self.act(self.fc(torch.cat([emb, recon_err], dim=-1)))
+
         rot_out = self.act(self.fc(recon_err))
         per_sample_err = recon_err.mean(dim=-1)    # (n,)
         batch_mean_err = per_sample_err.mean()     # 标量
@@ -268,16 +264,15 @@ class RaiseSep(torch.nn.Module):
 
         if self.training:
             prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False)
-            final_pred = (preds * prob).sum(dim=-1)
         else:
             prob = F.softmax(rot_out, dim=-1)
-            final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
 
-        # soft_pred = (preds * prob).sum(dim=-1)     # (n,)
-        # hard_idx = prob.argmax(dim=-1, keepdim=True)              # (n, 1)
-        # hard_onehot = torch.zeros_like(prob).scatter_(1, hard_idx, 1.0)
-        # hard_ste = hard_onehot - prob.detach() + prob             # 直通
-        # hard_pred = (preds * hard_ste).sum(dim=-1)                # (n,)
-        # final_pred = hard_pred * (1.0 - high_re_mask) + soft_pred * high_re_mask
+        soft_pred = (preds * prob).sum(dim=-1)     # (n,)
+        hard_idx = prob.argmax(dim=-1, keepdim=True)              # (n, 1)
+        hard_onehot = torch.zeros_like(prob).scatter_(1, hard_idx, 1.0)
+        hard_ste = hard_onehot - prob.detach() + prob             # 直通
+        hard_pred = (preds * hard_ste).sum(dim=-1)                # (n,)
+        final_pred = hard_pred * (1.0 - high_re_mask) + soft_pred * high_re_mask
 
         return final_pred, preds, prob, batch_mean_err
+    

@@ -16,25 +16,34 @@ def focal_loss(pred, y, reduction = 'mean', alpha=0.75, gamma=2.0):
     else:
         return loss # loss, matrix
 
-def ev_loss(pred, y):  
-    EPS = 1e-15
-    # gamma=1.0 version
-
-    prop_0 = len((1-y).nonzero())  # label = 0
-    prop_1 = len(y.nonzero())      # label = 1
-    pred_score_sigmoid = torch.sigmoid(pred)
-
+def ev_loss(pred, y):
+    
+    # pred 为 logits
     if y.shape != pred.shape:
         y = y[:, None].expand_as(pred).contiguous()
-        # 逐元素计算正负样本损失，并按照类别比例加权
-        pos_loss = -torch.log(pred_score_sigmoid + EPS) * (prop_0 / (prop_0 + prop_1)) * y
-        neg_loss = -torch.log(1 - pred_score_sigmoid + EPS) * (prop_1 / (prop_0 + prop_1)) * (1 - y)
-    else:
-        pos_loss = -torch.log(pred_score_sigmoid[y.nonzero()] + EPS).mean() * (prop_0/(prop_0+prop_1))
-        neg_loss = -torch.log(1 - pred_score_sigmoid[(1-y).nonzero()] + EPS).mean() * (prop_1/(prop_0+prop_1))
+    
+    loss = F.mse_loss(pred, y, reduction='none')
+    return loss # loss, matrix
 
-    loss = pos_loss + neg_loss  # shape: (num_sample, num_predictor)
-    return loss
+# def ev_loss(pred, y):  
+#     EPS = 1e-15
+#     # gamma=1.0 version
+
+#     prop_0 = len((1-y).nonzero())  # label = 0
+#     prop_1 = len(y.nonzero())      # label = 1
+#     pred_score_sigmoid = torch.sigmoid(pred)
+
+#     if y.shape != pred.shape:
+#         y = y[:, None].expand_as(pred).contiguous()
+#         # 逐元素计算正负样本损失，并按照类别比例加权
+#         pos_loss = -torch.log(pred_score_sigmoid + EPS) * (prop_0 / (prop_0 + prop_1)) * y
+#         neg_loss = -torch.log(1 - pred_score_sigmoid + EPS) * (prop_1 / (prop_0 + prop_1)) * (1 - y)
+#     else:
+#         pos_loss = -torch.log(pred_score_sigmoid[y.nonzero()] + EPS).mean() * (prop_0/(prop_0+prop_1))
+#         neg_loss = -torch.log(1 - pred_score_sigmoid[(1-y).nonzero()] + EPS).mean() * (prop_1/(prop_0+prop_1))
+
+#     loss = pos_loss + neg_loss  # shape: (num_sample, num_predictor)
+#     return loss
 
 def transfer_pred(out, threshold):
     pred = out.clone()

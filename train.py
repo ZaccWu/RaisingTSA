@@ -17,6 +17,7 @@ from load_data_dy import LoadFmcgDt
 from util.evaluate import transfer_pred, ev_loss, pairwise_ranking_loss, cal_ndcgK
 from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import classification_report
+from scipy.stats import spearmanr
 ## TODO: 可能要更改ev_loss
 
 def _configTrainArgs():
@@ -24,7 +25,7 @@ def _configTrainArgs():
 
     parser.add_argument('--data', type=str, help='load data', default='fs')
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--model', type=str, help='model name', default='raisp')
+    parser.add_argument('--model', type=str, help='model name', default='rai')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
     parser.add_argument('--extractor', type=str, help='model name', default='lstmtatt') # only functionable in 'rai' and 'raisp'
 
@@ -34,7 +35,7 @@ def _configTrainArgs():
     parser.add_argument('--tai', type=float, default=0.1, help='entropic tai for partial OT') # default 0.1
     parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=64) # 64
 
-    parser.add_argument('--lamb', type=float, help='rho', default=1) # default 1
+    parser.add_argument('--lamb', type=float, help='rho', default=0.01) # default 1
     parser.add_argument('--lr', type=float, help='learning rate', default=0.01) # default 0.01
 
 
@@ -73,11 +74,12 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
             else:
                 prd_select = torch.zeros_like(pred)
         else:
-            pred = model(x_b)
+            pred, _ = model(x_b)
             prd_select = torch.zeros_like(pred)
         
         loss_b = ev_loss(pred, y_b)
-        loss_sum += loss_b.item() * x_b.size(0)
+        #loss_sum += loss_b.item() * x_b.size(0)
+        loss_sum += loss_b.sum()
         n_sample += x_b.size(0)
 
         preds_list.append(pred.detach().cpu())
@@ -122,7 +124,7 @@ def train(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     global_step = -1
-    best_va_score, best_epoch_id = -np.inf, 0
+    best_va_score, best_epoch_id = np.inf, 0
     
     for i in range(args.n_epoch):
         model.training = True
@@ -131,10 +133,11 @@ def train(args):
         for batch_idx, (x_b, y_b) in enumerate(trDt_loader):
             x_b, y_b = x_b.to(device), y_b.to(device)
             optimizer.zero_grad()
-
+            
             if args.model in ['rai', 'raisp']:
                 pred, all_preds, prob, recon_loss = model(x_b) # all_preds, prob: (B, num_states)
                 pred_loss = ev_loss(pred, y_b)
+
                 if prob is not None:
                     L = ev_loss(all_preds, y_b)          # (B, num_states)
                     L -= L.min(dim=-1, keepdim=True).values  # normalize & ensure positive input
@@ -144,38 +147,41 @@ def train(args):
                         P = partial_sinkhorn(-L, epsilon=0.1, tai=args.tai)
                     lamb = args.lamb * (args.rho ** global_step) # lamb=0 still have multi-expert
                     ot_loss = prob.log().mul(P).sum(dim=-1).mean()
-                    loss = pred_loss - lamb * ot_loss
+                    loss = pred_loss.mean() - lamb * ot_loss
                 else:
-                    loss = pred_loss
+                    loss = pred_loss.mean()
                 
                 if args.model == 'raisp':
                     loss += 0.01 * recon_loss
+
                 
-                #print(pred_loss.detach(), -ot_loss.detach(), recon_loss.detach())
+                #print(pred_loss.mean().detach(), -ot_loss.detach(), recon_loss.detach())
 
             elif args.model in ['lstm', 'gru', 'trans', 'lstmha', 'lstmtatt']:
-                pred = model(x_b) # pred: (B, num_states)
-                loss = ev_loss(pred, y_b)
+                pred, _ = model(x_b) # pred: (B, num_states)
+                loss = ev_loss(pred, y_b).mean()
             
             else:
                 assert ValueError('Model not specified')
-
 
             loss.backward()
             optimizer.step()
         
         model.training = False
         va_pred, va_y, va_prds, va_loss = evalInBatches(args, model, vaDt_loader, device)
-        va_rec_r2 = transfer_pred(va_pred, torch.quantile(va_pred, 0.9, dim=None, keepdim=False))
 
 
+        # va_rec_r2 = transfer_pred(va_pred, torch.quantile(va_pred, 0.5, dim=None, keepdim=False))
 
-        rec_val = classification_report(va_y.numpy(), va_rec_r2.numpy(), target_names=['class0', 'class1'],
-                                output_dict=True)['class1']['recall']
-        va_score = rec_val
+        # rec_val = classification_report(va_y.numpy(), va_rec_r2.numpy(), target_names=['class0', 'class1'],
+        #                         output_dict=True)['class1']['recall']
+        # va_score = rec_val
+
+        va_score = F.mse_loss(va_pred, va_y, reduction='mean').numpy()
+
         print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
         #print('Predictors: ', pd.Series(va_prds.numpy()).value_counts())
-        if va_score > best_va_score:
+        if va_score < best_va_score:
             best_va_score = va_score
             best_model_state = copy.deepcopy(model.state_dict())
             best_epoch_id = i
@@ -185,74 +191,102 @@ def train(args):
     model.load_state_dict(best_model_state)
     ts_pred, ts_y, ts_prds, _ = evalInBatches(args, model, tsDt_loader, device, return_loss=False)
 
+    ts_mse = F.mse_loss(ts_pred, ts_y, reduction='mean').numpy()
+    ts_mae = (ts_pred - ts_y).abs().mean().item()
+    ts_spearman = spearmanr(ts_pred.numpy(), ts_y.numpy()).correlation
 
-    ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.95, dim=None, keepdim=False))
-    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9, dim=None, keepdim=False))
-    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.8, dim=None, keepdim=False))
-    r1_rec = classification_report(ts_y.numpy(), ts_rec_r1.numpy(), target_names=['class0', 'class1'],
-                            output_dict=True)['class1']['recall']
-    r2_rec = classification_report(ts_y.numpy(), ts_rec_r2.numpy(), target_names=['class0', 'class1'],
-                            output_dict=True)['class1']['recall']
-    r3_rec = classification_report(ts_y.numpy(), ts_rec_r3.numpy(), target_names=['class0', 'class1'],
-                            output_dict=True)['class1']['recall']
-    auc = roc_auc_score(ts_y.numpy(),ts_pred.numpy())
 
-    _, pred_r1 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r1.numpy())[0]))  # pred_r1: (k_rec_content)
-    _, pred_r2 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r2.numpy())[0]))
-    _, pred_r3 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r3.numpy())[0]))
+    # ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.6, dim=None, keepdim=False))
+    # ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.5, dim=None, keepdim=False))
+    # ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.4, dim=None, keepdim=False))
+    # r1_rec = classification_report(ts_y.numpy(), ts_rec_r1.numpy(), target_names=['class0', 'class1'],
+    #                         output_dict=True)['class1']['recall']
+    # r2_rec = classification_report(ts_y.numpy(), ts_rec_r2.numpy(), target_names=['class0', 'class1'],
+    #                         output_dict=True)['class1']['recall']
+    # r3_rec = classification_report(ts_y.numpy(), ts_rec_r3.numpy(), target_names=['class0', 'class1'],
+    #                         output_dict=True)['class1']['recall']
+    # auc = roc_auc_score(ts_y.numpy(),ts_pred.numpy())
 
-    r1_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r1.numpy())
-    r2_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r2.numpy())
-    r3_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r3.numpy())
+    # _, pred_r1 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r1.numpy())[0]))  # pred_r1: (k_rec_content)
+    # _, pred_r2 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r2.numpy())[0]))
+    # _, pred_r3 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r3.numpy())[0]))
+
+    # r1_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r1.numpy())
+    # r2_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r2.numpy())
+    # r3_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r3.numpy())
 
     print('Best epoch: ', best_epoch_id)
     if args.model in ['rai', 'raisp']:
         print('Predictors: ', pd.Series(ts_prds.cpu().numpy()).value_counts())
-    print('r1_rec {:3f},'.format(r1_rec),
-        'r2_rec {:3f},'.format(r2_rec),
-        'r3_rec {:3f},'.format(r3_rec),
-        'r1_ndcg {:3f},'.format(r1_ndcg),
-        'r2_ndcg {:3f},'.format(r2_ndcg),
-        'r3_ndcg {:3f},'.format(r3_ndcg),
-        'AUC {:3f},'.format(auc))
+    # print('r1_rec {:3f},'.format(r1_rec),
+    #     'r2_rec {:3f},'.format(r2_rec),
+    #     'r3_rec {:3f},'.format(r3_rec),
+    #     'r1_ndcg {:3f},'.format(r1_ndcg),
+    #     'r2_ndcg {:3f},'.format(r2_ndcg),
+    #     'r3_ndcg {:3f},'.format(r3_ndcg),
+    #     'AUC {:3f},'.format(auc))
+    
+    print('mse {:4f},'.format(ts_mse),
+        'mae {:4f},'.format(ts_mae),
+        'pear {:4f},'.format(ts_spearman))
+
+    # return {
+    #     'r1_rec':  r1_rec,
+    #     'r2_rec':  r2_rec,
+    #     'r3_rec':  r3_rec,
+    #     'r1_ndcg': r1_ndcg,
+    #     'r2_ndcg': r2_ndcg,
+    #     'r3_ndcg': r3_ndcg,
+    #     'auc':     auc,
+    # }
 
     return {
-        'r1_rec':  r1_rec,
-        'r2_rec':  r2_rec,
-        'r3_rec':  r3_rec,
-        'r1_ndcg': r1_ndcg,
-        'r2_ndcg': r2_ndcg,
-        'r3_ndcg': r3_ndcg,
-        'auc':     auc,
-    }
+    'mse': ts_mse,
+    'mae': ts_mae,
+    'pear': ts_spearman,
+}
 
 if __name__ == "__main__":
     args = _configTrainArgs()
+    # repeat_res = {
+    #     'r1_rec': [], 'r2_rec': [], 'r3_rec': [],
+    #     'r1_ndcg': [], 'r2_ndcg': [], 'r3_ndcg': [],
+    #     'auc': [],
+    # }
     repeat_res = {
-        'r1_rec': [], 'r2_rec': [], 'r3_rec': [],
-        'r1_ndcg': [], 'r2_ndcg': [], 'r3_ndcg': [],
-        'auc': [],
+        'mse': [],
+        'mae': [],
+        'pear': [],
     }
     for seed in range(101,111):
         set_seed(seed)
         #ts_res, ts_res_f = train(args)
         ts_res = train(args)
-        repeat_res['r1_rec'].append(ts_res['r1_rec'])
-        repeat_res['r2_rec'].append(ts_res['r2_rec'])
-        repeat_res['r3_rec'].append(ts_res['r3_rec'])
-        repeat_res['r1_ndcg'].append(ts_res['r1_ndcg'])
-        repeat_res['r2_ndcg'].append(ts_res['r2_ndcg'])
-        repeat_res['r3_ndcg'].append(ts_res['r3_ndcg'])
-        repeat_res['auc'].append(ts_res['auc'])
+        # repeat_res['r1_rec'].append(ts_res['r1_rec'])
+        # repeat_res['r2_rec'].append(ts_res['r2_rec'])
+        # repeat_res['r3_rec'].append(ts_res['r3_rec'])
+        # repeat_res['r1_ndcg'].append(ts_res['r1_ndcg'])
+        # repeat_res['r2_ndcg'].append(ts_res['r2_ndcg'])
+        # repeat_res['r3_ndcg'].append(ts_res['r3_ndcg'])
+        # repeat_res['auc'].append(ts_res['auc'])
+        repeat_res['mse'].append(ts_res['mse'])
+        repeat_res['mae'].append(ts_res['mae'])
+        repeat_res['pear'].append(ts_res['pear'])
 
     
-    print('AUC {:.4f} ({:.3f}), '.format(np.mean(repeat_res['auc']), np.std(repeat_res['auc'])),
-          ' R@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_rec']), np.std(repeat_res['r1_rec'])),
-          ' R@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_rec']), np.std(repeat_res['r2_rec'])),
-          ' R@3 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r3_rec']), np.std(repeat_res['r3_rec'])),
-          ' N@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_ndcg']), np.std(repeat_res['r1_ndcg'])),
-          ' N@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_ndcg']), np.std(repeat_res['r2_ndcg'])),
-          ' N@3 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r3_ndcg']), np.std(repeat_res['r3_ndcg'])),)
+    # print('AUC {:.4f} ({:.3f}), '.format(np.mean(repeat_res['auc']), np.std(repeat_res['auc'])),
+    #       ' R@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_rec']), np.std(repeat_res['r1_rec'])),
+    #       ' R@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_rec']), np.std(repeat_res['r2_rec'])),
+    #       ' R@3 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r3_rec']), np.std(repeat_res['r3_rec'])),
+    #       ' N@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_ndcg']), np.std(repeat_res['r1_ndcg'])),
+    #       ' N@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_ndcg']), np.std(repeat_res['r2_ndcg'])),
+    #       ' N@3 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r3_ndcg']), np.std(repeat_res['r3_ndcg'])),)
+    
+    print('MSE {:.4f} ({:.4f}), '.format(np.mean(repeat_res['mse']), np.std(repeat_res['mse'])),
+    'MAE {:.4f} ({:.4f}), '.format(np.mean(repeat_res['mae']), np.std(repeat_res['mae'])),
+    ' Pear {:.4f} ({:.3f}), '.format(np.mean(repeat_res['pear']), np.std(repeat_res['pear']))
+    )
+    
     print('All results | data: ', args.data, 'model: ', args.model,  'ns: ', args.ns, 'lamb', args.lamb)
     if args.model in ['rai', 'raisp']:
         print('Extractor: ', args.extractor)
