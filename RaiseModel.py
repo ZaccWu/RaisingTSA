@@ -188,25 +188,30 @@ class Raise(torch.nn.Module):
         elif extractor == 'lstmha':
             self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
         elif extractor == 'lstmtatt':
-            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim)
+            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim//2)
         else:
             raise ValueError('Extractor not specify')
 
         self.training = True
-        self.fc = torch.nn.Linear(h_dim, num_states)
-        self.predictors = torch.nn.Linear(h_dim, self.num_states)
+        self.fc = torch.nn.Linear(h_dim//2, num_states)
+        #self.predictors = torch.nn.Linear(h_dim, self.num_states)
+
+        self.predictor1 = torch.nn.Linear(h_dim//2, 1)
+        self.predictor2 = torch.nn.Linear(h_dim//2, 1)
+        self.predictor3 = torch.nn.Linear(h_dim//2, 1)
+
         self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
         emb, _ = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, h_dim)
-        # input: (batch, hidden)
-        #preds = self.act(self.predictors(emb)) # preds: (batch, 3)
-        preds = self.predictors(emb) # preds: (batch, 3)
+        #preds = self.predictors(emb) # preds: (batch, 3)
+        pred1, pred2, pred3 = self.predictor1(emb), self.predictor2(emb), self.predictor3(emb)
+        preds = self.act(torch.cat([pred1, pred2, pred3], dim=1))
 
-        if self.num_states == 1:
-            return preds.squeeze(-1), preds, None, None
+        # if self.num_states == 1:
+        #     return preds.squeeze(-1), preds, None, None
         
-        rot_out = self.act(self.fc(torch.cat([emb], dim=-1)))
+        rot_out = self.fc(emb)
         if self.training:
             prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False) # prob: (batch, num_state)
             final_pred = (preds * prob).sum(dim=-1)
@@ -214,7 +219,7 @@ class Raise(torch.nn.Module):
             prob = F.softmax(rot_out, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
         # final_pred: (batch)
-        return final_pred, preds, prob, None
+        return final_pred, preds, prob
 
 
 class RaiseSep(torch.nn.Module):
@@ -223,56 +228,61 @@ class RaiseSep(torch.nn.Module):
         self.num_states = num_states
         self.gstai = 1
         if extractor == 'lstm':
-            self.feature_extractor = LSTM(in_dim, h_dim, out_dim=h_dim)
+            self.feature_extractor = LSTM(in_dim, h_dim, out_dim=h_dim*2)
         elif extractor == 'gru':
-            self.feature_extractor = GRU(in_dim, h_dim, out_dim=h_dim)
+            self.feature_extractor = GRU(in_dim, h_dim, out_dim=h_dim*2)
         elif extractor == 'trans':
-            self.feature_extractor = Transformer(30, in_dim, h_dim, out_dim=h_dim)
+            self.feature_extractor = Transformer(30, in_dim, h_dim, out_dim=h_dim*2)
         elif extractor == 'lstmha':
-            self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
+            self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim*2)
         elif extractor == 'lstmtatt':
-            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim)
+            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim*2)
         else:
             raise ValueError('Extractor not specify')
 
         self.training = True
-        self.router = Decoder(in_dim, 16, in_dim)
-        #self.fc = torch.nn.Linear(h_dim + in_dim, num_states)
-        self.fc = torch.nn.Linear(in_dim, num_states)
+        #self.router = Decoder(in_dim, 16, in_dim)
+
+        self.fc = torch.nn.Linear(h_dim, num_states)
         self.predictors = torch.nn.Linear(h_dim, self.num_states)
         self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
-        emb, _ = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, h_dim)
-        # input: (batch, hidden)
-        x_hat = self.router(x)  # (n, K, fea_dim)->(n, K, h_dim)
-        recon_err = (x_hat - x).pow(2).mean(dim=1)   # ->(n, fea_dim)
-        preds = self.act(self.predictors(emb)) # preds: (batch, 3)
+        emb, _ = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, 2*h_dim)
+        z_s, z_e = emb.chunk(2, dim=-1)                        # 各 (n, h_dim)
+
+        # # input: (batch, hidden)
+        # x_hat = self.router(x)  # (n, K, fea_dim)->(n, K, h_dim)
+        # recon_err = (x_hat - x).pow(2).mean(dim=1)   # ->(n, fea_dim)
+
+        preds = self.act(self.predictors(z_s)) # preds: (batch, 3)
 
 
         # prob: (batch, num_state)
         #rot_out = self.act(self.fc(torch.cat([emb, recon_err], dim=-1)))
 
-        rot_out = self.act(self.fc(recon_err))
-        per_sample_err = recon_err.mean(dim=-1)    # (n,)
-        batch_mean_err = per_sample_err.mean()     # 标量
+        rot_out = self.act(self.fc(z_e))
+        # per_sample_err = recon_err.mean(dim=-1)    # (n,)
+        # batch_mean_err = per_sample_err.mean()     # 标量
 
         if self.num_states == 1:
-            return preds.squeeze(-1), preds, None, batch_mean_err
+            return preds.squeeze(-1), preds, None#, batch_mean_err
 
-        high_re_mask = (per_sample_err > batch_mean_err).to(preds.dtype)  # (n,) 0/1
+        # high_re_mask = (per_sample_err > batch_mean_err).to(preds.dtype)  # (n,) 0/1
 
         if self.training:
             prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False)
+            final_pred = (preds * prob).sum(dim=-1)
         else:
             prob = F.softmax(rot_out, dim=-1)
+            final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
 
-        soft_pred = (preds * prob).sum(dim=-1)     # (n,)
-        hard_idx = prob.argmax(dim=-1, keepdim=True)              # (n, 1)
-        hard_onehot = torch.zeros_like(prob).scatter_(1, hard_idx, 1.0)
-        hard_ste = hard_onehot - prob.detach() + prob             # 直通
-        hard_pred = (preds * hard_ste).sum(dim=-1)                # (n,)
-        final_pred = hard_pred * (1.0 - high_re_mask) + soft_pred * high_re_mask
+        # soft_pred = (preds * prob).sum(dim=-1)     # (n,)
+        # hard_idx = prob.argmax(dim=-1, keepdim=True)              # (n, 1)
+        # hard_onehot = torch.zeros_like(prob).scatter_(1, hard_idx, 1.0)
+        # hard_ste = hard_onehot - prob.detach() + prob             # 直通
+        # hard_pred = (preds * hard_ste).sum(dim=-1)                # (n,)
+        # final_pred = hard_pred * (1.0 - high_re_mask) + soft_pred * high_re_mask
 
-        return final_pred, preds, prob, batch_mean_err
+        return final_pred, preds, prob#, batch_mean_err
     

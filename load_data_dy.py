@@ -107,8 +107,8 @@ class LoadFmcgDt():
         
     def loadSamples(self, date, type='clas'):
         features = self.all_stock_feature[:, date:date + self.K, :] # process feature (N, time_step, feature_dim)
-        #labels = torch.LongTensor(self.all_stock_dvclass[date + self.K])  # (stock_num)
-        labels = torch.FloatTensor(self.all_stock_dv[date + self.K])  # (stock_num)
+        labels = torch.LongTensor(self.all_stock_dvclass[date + self.K])  # (stock_num)
+        #labels = torch.FloatTensor(self.all_stock_dv[date + self.K])  # (stock_num)
         return features, labels
     
     def loadTrainTest(self):
