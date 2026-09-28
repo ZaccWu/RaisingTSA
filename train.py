@@ -124,7 +124,7 @@ def train(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     global_step = -1
-    best_va_score, best_epoch_id = np.inf, 0
+    best_va_score, best_epoch_id = -np.inf, 0
     
     for i in range(args.n_epoch):
         model.training = True
@@ -146,8 +146,11 @@ def train(args):
                     else:
                         P = partial_sinkhorn(-L, epsilon=0.1, tai=args.tai)
                     lamb = args.lamb * (args.rho ** global_step) # lamb=0 still have multi-expert
-                    ot_loss = prob.log().mul(P).sum(dim=-1).mean()
-                    loss = pred_loss.mean() - lamb * ot_loss
+                    #ot_loss = prob.log().mul(P).sum(dim=-1).mean()
+                    #loss = pred_loss.mean() - lamb * ot_loss
+                    prob_safe = prob.clamp_min(1e-12)
+                    ot_loss = (P * prob_safe.log()).sum(dim=-1).mean()
+                    loss = pred_loss.mean() + lamb * ot_loss
                 else:
                     loss = pred_loss.mean()
                 
@@ -155,7 +158,7 @@ def train(args):
                 #     loss += 0.01 * recon_loss
 
                 
-                #print(pred_loss.mean().detach(), -ot_loss.detach(), recon_loss.detach())
+                #print(pred_loss.mean().detach(), ot_loss.detach())
 
             elif args.model in ['lstm', 'gru', 'trans', 'lstmha', 'lstmtatt']:
                 pred, _ = model(x_b) # pred: (B, num_states)
@@ -169,19 +172,22 @@ def train(args):
         
         model.training = False
         va_pred, va_y, va_prds, va_loss = evalInBatches(args, model, vaDt_loader, device)
+        ts_pred, ts_y, _, _ = evalInBatches(args, model, tsDt_loader, device)
 
+        va_rec_r3 = transfer_pred(va_pred, torch.quantile(va_pred, 0.5, dim=None, keepdim=False))
+        ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.5, dim=None, keepdim=False))
 
-        # va_rec_r2 = transfer_pred(va_pred, torch.quantile(va_pred, 0.5, dim=None, keepdim=False))
+        rec_val = classification_report(va_y.numpy(), va_rec_r3.numpy(), target_names=['class0', 'class1'],
+                                output_dict=True)['class1']['recall']
+        rec_ts = classification_report(ts_y.numpy(), ts_rec_r3.numpy(), target_names=['class0', 'class1'],
+                                output_dict=True)['class1']['recall']
+        va_score = rec_val
 
-        # rec_val = classification_report(va_y.numpy(), va_rec_r2.numpy(), target_names=['class0', 'class1'],
-        #                         output_dict=True)['class1']['recall']
-        # va_score = rec_val
+        # va_score = F.mse_loss(va_pred, va_y, reduction='mean').numpy()
 
-        va_score = F.mse_loss(va_pred, va_y, reduction='mean').numpy()
-
-        print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}'.format(i, va_loss, va_score))
+        print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}, ts_score {:.4f}'.format(i, va_loss, va_score, rec_ts))
         #print('Predictors: ', pd.Series(va_prds.numpy()).value_counts())
-        if va_score < best_va_score:
+        if va_score > best_va_score:
             best_va_score = va_score
             best_model_state = copy.deepcopy(model.state_dict())
             best_epoch_id = i
@@ -196,9 +202,9 @@ def train(args):
     # ts_spearman = spearmanr(ts_pred.numpy(), ts_y.numpy()).correlation
 
 
-    ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.6, dim=None, keepdim=False))
-    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.5, dim=None, keepdim=False))
-    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.4, dim=None, keepdim=False))
+    ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.85, dim=None, keepdim=False))
+    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.7, dim=None, keepdim=False))
+    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.5, dim=None, keepdim=False))
     r1_rec = classification_report(ts_y.numpy(), ts_rec_r1.numpy(), target_names=['class0', 'class1'],
                             output_dict=True)['class1']['recall']
     r2_rec = classification_report(ts_y.numpy(), ts_rec_r2.numpy(), target_names=['class0', 'class1'],

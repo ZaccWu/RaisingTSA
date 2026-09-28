@@ -188,25 +188,25 @@ class Raise(torch.nn.Module):
         elif extractor == 'lstmha':
             self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
         elif extractor == 'lstmtatt':
-            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim//2)
+            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim)
         else:
             raise ValueError('Extractor not specify')
 
         self.training = True
-        self.fc = torch.nn.Linear(h_dim//2, num_states)
-        #self.predictors = torch.nn.Linear(h_dim, self.num_states)
+        self.fc = torch.nn.Linear(h_dim, self.num_states)
+        self.predictors = torch.nn.Linear(h_dim, self.num_states)
 
-        self.predictor1 = torch.nn.Linear(h_dim//2, 1)
-        self.predictor2 = torch.nn.Linear(h_dim//2, 1)
-        self.predictor3 = torch.nn.Linear(h_dim//2, 1)
+        # self.predictor1 = torch.nn.Linear(h_dim//2, 1)
+        # self.predictor2 = torch.nn.Linear(h_dim//2, 1)
+        # self.predictor3 = torch.nn.Linear(h_dim//2, 1)
 
         self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
         emb, _ = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, h_dim)
-        #preds = self.predictors(emb) # preds: (batch, 3)
-        pred1, pred2, pred3 = self.predictor1(emb), self.predictor2(emb), self.predictor3(emb)
-        preds = self.act(torch.cat([pred1, pred2, pred3], dim=1))
+        preds = self.predictors(emb) # preds: (batch, 3)
+        # pred1, pred2, pred3 = self.predictor1(emb), self.predictor2(emb), self.predictor3(emb)
+        # preds = self.act(torch.cat([pred1, pred2, pred3], dim=1))
 
         # if self.num_states == 1:
         #     return preds.squeeze(-1), preds, None, None
