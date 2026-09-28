@@ -276,7 +276,7 @@ class RaiseSep(torch.nn.Module):
         else:
             prob = F.softmax(rot_out, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
-
+            #final_pred = (preds * prob).sum(dim=-1)
         # soft_pred = (preds * prob).sum(dim=-1)     # (n,)
         # hard_idx = prob.argmax(dim=-1, keepdim=True)              # (n, 1)
         # hard_onehot = torch.zeros_like(prob).scatter_(1, hard_idx, 1.0)

@@ -2,21 +2,18 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-def focal_loss(pred, y, reduction = 'mean', alpha=0.75, gamma=2.0):
+def focal_loss(pred, y, alpha=0.75, gamma=2.0):
     # pred 为 logits
     if y.shape != pred.shape:
-        y = y.expand_as(pred).contiguous()
+        y = y[:, None].expand_as(pred).contiguous()
     bce = F.binary_cross_entropy_with_logits(pred, y, reduction='none')
     p = torch.sigmoid(pred) # (n) or (n,k)
     p_t = p * y + (1 - p) * (1 - y)
     alpha_t = alpha * y + (1 - alpha) * (1 - y)   # 正样本 alpha 大
     loss = alpha_t * (1 - p_t).pow(gamma) * bce # (n) or (n,k)
-    if reduction == 'mean':
-        return loss.mean() # final prediction
-    else:
-        return loss # loss, matrix
+    return loss # loss, matrix
 
-def ev_loss(pred, y):
+def mse_loss(pred, y):
     
     # pred 为 logits
     if y.shape != pred.shape:
@@ -25,25 +22,25 @@ def ev_loss(pred, y):
     loss = F.mse_loss(pred, y, reduction='none')
     return loss # loss, matrix
 
-# def ev_loss(pred, y):  
-#     EPS = 1e-15
-#     # gamma=1.0 version
+def ev_loss(pred, y):  
+    EPS = 1e-15
+    # gamma=1.0 version
 
-#     prop_0 = len((1-y).nonzero())  # label = 0
-#     prop_1 = len(y.nonzero())      # label = 1
-#     pred_score_sigmoid = torch.sigmoid(pred)
+    prop_0 = len((1-y).nonzero())  # label = 0
+    prop_1 = len(y.nonzero())      # label = 1
+    pred_score_sigmoid = torch.sigmoid(pred)
 
-#     if y.shape != pred.shape:
-#         y = y[:, None].expand_as(pred).contiguous()
-#         # 逐元素计算正负样本损失，并按照类别比例加权
-#         pos_loss = -torch.log(pred_score_sigmoid + EPS) * (prop_0 / (prop_0 + prop_1)) * y
-#         neg_loss = -torch.log(1 - pred_score_sigmoid + EPS) * (prop_1 / (prop_0 + prop_1)) * (1 - y)
-#     else:
-#         pos_loss = -torch.log(pred_score_sigmoid[y.nonzero()] + EPS).mean() * (prop_0/(prop_0+prop_1))
-#         neg_loss = -torch.log(1 - pred_score_sigmoid[(1-y).nonzero()] + EPS).mean() * (prop_1/(prop_0+prop_1))
+    if y.shape != pred.shape:
+        y = y[:, None].expand_as(pred).contiguous()
+        # 逐元素计算正负样本损失，并按照类别比例加权
+        pos_loss = -torch.log(pred_score_sigmoid + EPS) * (prop_0 / (prop_0 + prop_1)) * y
+        neg_loss = -torch.log(1 - pred_score_sigmoid + EPS) * (prop_1 / (prop_0 + prop_1)) * (1 - y)
+    else:
+        pos_loss = -torch.log(pred_score_sigmoid[y.nonzero()] + EPS).mean() * (prop_0/(prop_0+prop_1))
+        neg_loss = -torch.log(1 - pred_score_sigmoid[(1-y).nonzero()] + EPS).mean() * (prop_1/(prop_0+prop_1))
 
-#     loss = pos_loss + neg_loss  # shape: (num_sample, num_predictor)
-#     return loss
+    loss = pos_loss + neg_loss  # shape: (num_sample, num_predictor)
+    return loss
 
 def transfer_pred(out, threshold):
     pred = out.clone()
@@ -56,12 +53,9 @@ def huber_loss(pred, target, delta=1.0, reduction='mean'):
     return F.huber_loss(pred, target, delta=delta, reduction=reduction)
 
 
+
+
 def pairwise_ranking_loss(pred, target, min_target_diff=0.1):
-    """
-    Batch 内相邻对排序损失：
-    按 target 降序排列后，相邻样本应保持 pred 的降序。
-    只用相对顺序，不依赖绝对边界，适合稀有正样本。
-    """
     B = pred.size(0)
     if B < 2:
         return torch.tensor(0.0, device=pred.device, requires_grad=True)
