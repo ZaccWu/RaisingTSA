@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-def focal_loss(pred, y, alpha=0.75, gamma=2.0):
+def focal_loss(pred, y, alpha=0.8, gamma=2.0):
     # pred 为 logits
     if y.shape != pred.shape:
         y = y[:, None].expand_as(pred).contiguous()

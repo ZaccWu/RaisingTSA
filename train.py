@@ -177,8 +177,8 @@ def train(args):
         va_pred, va_y, va_prds, va_loss = evalInBatches(args, model, vaDt_loader, device)
         ts_pred, ts_y, _, _ = evalInBatches(args, model, tsDt_loader, device)
 
-        va_rec_r3 = transfer_pred(va_pred, torch.quantile(va_pred, 0.5, dim=None, keepdim=False))
-        ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.5, dim=None, keepdim=False))
+        va_rec_r3 = transfer_pred(va_pred, torch.quantile(va_pred, 0.9, dim=None, keepdim=False))
+        ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9, dim=None, keepdim=False))
 
         rec_val = classification_report(va_y.numpy(), va_rec_r3.numpy(), target_names=['class0', 'class1'],
                                 output_dict=True)['class1']['recall']
@@ -205,9 +205,9 @@ def train(args):
     # ts_spearman = spearmanr(ts_pred.numpy(), ts_y.numpy()).correlation
 
 
-    ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.85, dim=None, keepdim=False))
-    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.7, dim=None, keepdim=False))
-    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.5, dim=None, keepdim=False))
+    ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.95, dim=None, keepdim=False))
+    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9, dim=None, keepdim=False))
+    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.8, dim=None, keepdim=False))
     r1_rec = classification_report(ts_y.numpy(), ts_rec_r1.numpy(), target_names=['class0', 'class1'],
                             output_dict=True)['class1']['recall']
     r2_rec = classification_report(ts_y.numpy(), ts_rec_r2.numpy(), target_names=['class0', 'class1'],

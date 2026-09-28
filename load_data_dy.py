@@ -44,8 +44,8 @@ def getDv(all_stock_sales, total_time_step, num_stock, tau):
     for i in range(total_time_step - tau):
         all_stock_return[i] = np.sum(all_stock_sales[i: i + tau], axis=0) / (np.sum(all_stock_sales[i-tau: i], axis=0) + np.ones(all_stock_sales[i].shape))  ## avoid zero
     all_stock_dv, all_stock_dvclass = np.array(all_stock_return.copy()), np.array(all_stock_return.copy())
-    all_stock_dvclass[all_stock_return <= 1] = 0
-    all_stock_dvclass[all_stock_return > 1] = 1
+    all_stock_dvclass[all_stock_return <= 1.5] = 0
+    all_stock_dvclass[all_stock_return > 1.5] = 1
     all_stock_dv = np.log(all_stock_dv+1)
     return all_stock_dv, all_stock_dvclass
 
@@ -98,7 +98,7 @@ def getFmcgRawDt(product):
 class LoadFmcgDt():
     def __init__(self, product='fs'):
         self.K = 30  # lookback window size (larger than tau)
-        self.tau = 10 # predict timestep ahead (define of raising)
+        self.tau = 7 # predict timestep ahead (define of raising)
         self.all_stock_feature, self.all_stock_sales, self.train_len, self.trainval_len, self.time_stump_df, self.thscode_select = preprocessFmcgDt(product=product)
         self.num_stock = len(self.thscode_select)
         self.time_length = len(self.time_stump_df)
