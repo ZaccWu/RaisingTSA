@@ -6,12 +6,13 @@ from torch.utils.data import Dataset, DataLoader
 import os
 
 class TSAData(Dataset):
-    def __init__(self, x_l, y_l):
+    def __init__(self, x_l, y_l, y_au):
         super(TSAData, self).__init__()
         self.x = torch.FloatTensor(x_l)
         self.y = torch.FloatTensor(y_l)
+        self.y_au = torch.FloatTensor(y_au)
     def __getitem__(self, idx):
-        return self.x[idx], self.y[idx]
+        return self.x[idx], self.y[idx], self.y_au[idx]
     def __len__(self):
         return (len(self.y))
 
@@ -108,33 +109,36 @@ class LoadFmcgDt():
     def loadSamples(self, date, type='clas'):
         features = self.all_stock_feature[:, date:date + self.K, :] # process feature (N, time_step, feature_dim)
         labels = torch.LongTensor(self.all_stock_dvclass[date + self.K])  # (stock_num)
-        #labels = torch.FloatTensor(self.all_stock_dv[date + self.K])  # (stock_num)
-        return features, labels
+        labels_au = torch.FloatTensor(self.all_stock_dv[date + self.K])  # (stock_num)
+        return features, labels, labels_au
     
     def loadTrainTest(self):
-        trX, trY = [], []
+        trX, trY, trYau = [], [], []
         for date in range(0, self.train_len-self.tau-self.K):
-            features, labels = self.loadSamples(date)
+            features, labels, labels_au = self.loadSamples(date)
             trX.append(features)
             trY.append(labels)
-        trX, trY = np.concatenate(trX, axis=0), np.concatenate(trY, axis=0)
-        trDt = TSAData(trX, trY)
+            trYau.append(labels_au)
+        trX, trY, trYau = np.concatenate(trX, axis=0), np.concatenate(trY, axis=0), np.concatenate(trYau, axis=0)
+        trDt = TSAData(trX, trY, trYau)
 
-        vaX, vaY = [], []
+        vaX, vaY, vaYau = [], [], []
         for date in range(self.train_len-self.tau-self.K, self.trainval_len-self.tau-self.K):
-            features, labels = self.loadSamples(date)
+            features, labels, labels_au = self.loadSamples(date)
             vaX.append(features)
             vaY.append(labels)
-        vaX, vaY = np.concatenate(vaX, axis=0), np.concatenate(vaY, axis=0)
-        vaDt = TSAData(vaX, vaY)
+            vaYau.append(labels_au)
+        vaX, vaY, vaYau = np.concatenate(vaX, axis=0), np.concatenate(vaY, axis=0), np.concatenate(vaYau, axis=0)
+        vaDt = TSAData(vaX, vaY, vaYau)
 
-        tsX, tsY = [], []
+        tsX, tsY, tsYau = [], [], []
         for date in range(self.trainval_len-self.tau-self.K, self.time_length-self.tau-self.K):
-            features, labels = self.loadSamples(date)
+            features, labels, labels_au = self.loadSamples(date)
             tsX.append(features)
             tsY.append(labels)
-        tsX, tsY = np.concatenate(tsX, axis=0), np.concatenate(tsY, axis=0)
-        tsDt = TSAData(tsX, tsY)
+            tsYau.append(labels_au)
+        tsX, tsY, tsYau = np.concatenate(tsX, axis=0), np.concatenate(tsY, axis=0), np.concatenate(tsYau, axis=0)
+        tsDt = TSAData(tsX, tsY, tsYau)
 
         return trDt, vaDt, tsDt
 

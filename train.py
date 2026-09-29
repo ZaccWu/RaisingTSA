@@ -14,7 +14,7 @@ import copy
 from RaiseModel import Raise, RaiseSep, sinkhorn, partial_sinkhorn, LSTM, GRU, Transformer, LSTMHA, LSTMTATT
 from load_data import LoadAliDt
 from load_data_dy import LoadFmcgDt
-from util.evaluate import transfer_pred, ev_loss, focal_loss, pairwise_ranking_loss, cal_ndcgK
+from util.evaluate import mse_loss, transfer_pred, ev_loss, focal_loss, pairwise_ranking_loss, cal_ndcgK
 from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import classification_report
 from scipy.stats import spearmanr
@@ -62,7 +62,7 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
     model.eval()
     preds_list, y_list, y_bin_list, prds_list = [], [], [], []
     loss_sum, n_sample = 0.0, 0
-    for x_b, y_b in data_loader:
+    for x_b, y_b, _ in data_loader:
         x_b = x_b.to(device)
         y_b = y_b.to(device)
 
@@ -129,13 +129,14 @@ def train(args):
         model.training = True
         model.train()
         global_step += 1
-        for batch_idx, (x_b, y_b) in enumerate(trDt_loader):
-            x_b, y_b = x_b.to(device), y_b.to(device)
+        for batch_idx, (x_b, y_b, y_au) in enumerate(trDt_loader):
+            x_b, y_b, y_au = x_b.to(device), y_b.to(device), y_au.to(device)
             optimizer.zero_grad()
             
             if args.model in ['rai', 'raisp']:
                 pred, all_preds, prob = model(x_b) # all_preds, prob: (B, num_states)
                 pred_loss = focal_loss(pred, y_b)
+                inv_loss = mse_loss(pred, y_b, y_au)
 
                 if prob is not None:
                     L = focal_loss(all_preds, y_b)          # (B, num_states)
@@ -148,7 +149,7 @@ def train(args):
                     lamb = args.lamb * (args.rho ** global_step) # lamb=0 still have multi-expert
                     #直接让路由分布对齐 P，而不是反过来
                     ot_loss = F.kl_div(prob.log(), P, reduction='batchmean')
-                    loss = pred_loss.mean() + lamb * ot_loss
+                    loss = pred_loss.mean() + lamb * ot_loss + inv_loss.mean()
 
                     # prob_safe = prob.clamp_min(1e-12)
                     # ot_loss = (P * prob_safe.log()).sum(dim=-1).mean()
@@ -160,7 +161,7 @@ def train(args):
                 #     loss += 0.01 * recon_loss
 
                 
-                #print(pred_loss.mean().detach().numpy(), ot_loss.detach().numpy())
+                #print(pred_loss.mean().detach().numpy(), ot_loss.detach().numpy(), inv_loss.mean().detach().numpy())
 
             elif args.model in ['lstm', 'gru', 'trans', 'lstmha', 'lstmtatt']:
                 pred, _ = model(x_b) # pred: (B, num_states)

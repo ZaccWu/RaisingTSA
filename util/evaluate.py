@@ -13,13 +13,15 @@ def focal_loss(pred, y, alpha=0.8, gamma=2.0):
     loss = alpha_t * (1 - p_t).pow(gamma) * bce # (n) or (n,k)
     return loss # loss, matrix
 
-def mse_loss(pred, y):
+def mse_loss(pred, y, y_au):
     
-    # pred 为 logits
-    if y.shape != pred.shape:
-        y = y[:, None].expand_as(pred).contiguous()
+    # # pred 为 logits
+    # if y.shape != pred.shape:
+    #     y = y[:, None].expand_as(pred).contiguous()
     
-    loss = F.mse_loss(pred, y, reduction='none')
+    loss = F.mse_loss(pred, y_au, reduction='none')
+    mask = (y == 0).to(loss.dtype)
+    loss = loss * mask
     return loss # loss, matrix
 
 def ev_loss(pred, y):  
