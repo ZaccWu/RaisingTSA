@@ -38,7 +38,6 @@ def _configTrainArgs():
     parser.add_argument('--lamb', type=float, help='rho', default=0.01) # default 1
     parser.add_argument('--lr', type=float, help='learning rate', default=0.01) # default 0.01
 
-
     parser.add_argument('--bs', type=int, help='batch size', default=8192) # cpu: 8192, gpu: 2048
     parser.add_argument('--n_epoch', type=int, help='number of epochs', default=100)
     parser.add_argument('--gpu', type=int, help='idx for the gpu to use', default=0)
