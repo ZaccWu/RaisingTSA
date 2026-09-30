@@ -28,8 +28,8 @@ def preprocessFmcgDt(product):
     thscode_select = list(df['filename'].unique())  # the product we choose
     time_stump_df = df['日期'].unique()  # total timesteps
     tks = {
-        'nc': {'TrVaSpl': 20240425, 'VaTsSpl': 20240501},
-        'fs': {'TrVaSpl': 20240425, 'VaTsSpl': 20240501},
+        'nc': {'TrVaSpl': 20240510, 'VaTsSpl': 20240513},
+        'fs': {'TrVaSpl': 20240510, 'VaTsSpl': 20240513},
     }
     df_trans = encodingFeatures(df)
     all_stock_feature, all_stock_sales = getNumpyTsaXYfromDf(df_trans, thscode_select)
@@ -99,10 +99,10 @@ def getFmcgRawDt(product):
 class LoadFmcgDt():
     def __init__(self, product='fs'):
         self.K = 30  # lookback window size (larger than tau)
-        self.tau = 7 # predict timestep ahead (define of raising)
+        self.tau = 3 # predict timestep ahead (define of raising)
         self.all_stock_feature, self.all_stock_sales, self.train_len, self.trainval_len, self.time_stump_df, self.thscode_select = preprocessFmcgDt(product=product)
         self.num_stock = len(self.thscode_select)
-        self.time_length = len(self.time_stump_df)
+        self.time_length = 76 #len(self.time_stump_df)
         # dvckass -> (time_step-tau, stock_num)
         self.all_stock_dv, self.all_stock_dvclass = getDv(self.all_stock_sales, total_time_step=len(self.time_stump_df), num_stock=self.num_stock, tau=self.tau)
         
