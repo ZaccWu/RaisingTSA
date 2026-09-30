@@ -25,9 +25,9 @@ def _configTrainArgs():
 
     parser.add_argument('--data', type=str, help='load data', default='fs')
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--model', type=str, help='model name', default='lstm')
+    parser.add_argument('--model', type=str, help='model name', default='rai')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--extractor', type=str, help='model name', default='lstmtatt') # only functionable in 'rai' and 'raisp'
+    parser.add_argument('--extractor', type=str, help='model name', default='lstm') # only functionable in 'rai' and 'raisp'
 
     parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
@@ -67,7 +67,7 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
         y_b = y_b.to(device)
 
         if args.model in ['rai', 'raisp']:
-            pred, _, prob = model(x_b)
+            pred, _, prob, _ = model(x_b)
             if prob is not None:
                 prd_select = prob.argmax(dim=-1).detach().cpu()
             else:
@@ -134,7 +134,7 @@ def train(args):
             optimizer.zero_grad()
             
             if args.model in ['rai', 'raisp']:
-                pred, all_preds, prob = model(x_b) # all_preds, prob: (B, num_states)
+                pred, all_preds, prob, mean_pred = model(x_b) # all_preds, prob: (B, num_states)
                 pred_loss = focal_loss(pred, y_b)
                 inv_loss = mse_loss(pred, y_b, y_au)
 
@@ -149,7 +149,7 @@ def train(args):
                     lamb = args.lamb * (args.rho ** global_step) # lamb=0 still have multi-expert
                     #直接让路由分布对齐 P，而不是反过来
                     ot_loss = F.kl_div(prob.log(), P, reduction='batchmean')
-                    loss = pred_loss.mean() + lamb * ot_loss + inv_loss.mean()
+                    loss = pred_loss.mean() + lamb * ot_loss + 0.1*inv_loss.mean()
 
                     # prob_safe = prob.clamp_min(1e-12)
                     # ot_loss = (P * prob_safe.log()).sum(dim=-1).mean()
@@ -177,18 +177,24 @@ def train(args):
         va_pred, va_y, va_prds, va_loss = evalInBatches(args, model, vaDt_loader, device)
         ts_pred, ts_y, _, _ = evalInBatches(args, model, tsDt_loader, device)
 
-        va_rec_r3 = transfer_pred(va_pred, torch.quantile(va_pred, 0.9, dim=None, keepdim=False))
-        ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9, dim=None, keepdim=False))
+        va_rec_r3 = transfer_pred(va_pred, torch.quantile(va_pred, 0.5, dim=None, keepdim=False))
+        ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.5, dim=None, keepdim=False))
 
         rec_val = classification_report(va_y.numpy(), va_rec_r3.numpy(), target_names=['class0', 'class1'],
                                 output_dict=True)['class1']['recall']
+        # _, pred_r3_va = torch.topk(va_pred.detach(), k=len(np.nonzero(va_rec_r3.numpy())[0]))
+        # r3_ndcg_va = cal_ndcgK(np.nonzero(va_y.numpy())[0], pred_r3_va.numpy())
+
         rec_ts = classification_report(ts_y.numpy(), ts_rec_r3.numpy(), target_names=['class0', 'class1'],
                                 output_dict=True)['class1']['recall']
+        # _, pred_r3_ts = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r3.numpy())[0]))
+        # r3_ndcg_ts = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r3_ts.numpy())
+        
         va_score = rec_val
 
         # va_score = F.mse_loss(va_pred, va_y, reduction='mean').numpy()
 
-        print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}, ts_score {:.4f}'.format(i, va_loss, va_score, rec_ts))
+        print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}, ts_score {:.4f}'.format(i, va_loss, rec_val, rec_ts))
         #print('Predictors: ', pd.Series(va_prds.numpy()).value_counts())
         if va_score > best_va_score:
             best_va_score = va_score
@@ -205,9 +211,9 @@ def train(args):
     # ts_spearman = spearmanr(ts_pred.numpy(), ts_y.numpy()).correlation
 
 
-    ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.95, dim=None, keepdim=False))
-    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.90, dim=None, keepdim=False))
-    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.80, dim=None, keepdim=False))
+    ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.85, dim=None, keepdim=False))
+    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.70, dim=None, keepdim=False))
+    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.50, dim=None, keepdim=False))
     r1_rec = classification_report(ts_y.numpy(), ts_rec_r1.numpy(), target_names=['class0', 'class1'],
                             output_dict=True)['class1']['recall']
     r2_rec = classification_report(ts_y.numpy(), ts_rec_r2.numpy(), target_names=['class0', 'class1'],

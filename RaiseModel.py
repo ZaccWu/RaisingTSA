@@ -215,12 +215,14 @@ class Raise(torch.nn.Module):
         if self.training:
             prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False) # prob: (batch, num_state)
             final_pred = (preds * prob).sum(dim=-1)
+            mean_pred = preds.mean(dim=-1)
         else:
             prob = F.softmax(rot_out, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
+            mean_pred = preds.mean(dim=-1)
         
         # final_pred: (batch)
-        return final_pred, preds, prob
+        return final_pred, preds, prob, mean_pred
 
 
 class RaiseSep(torch.nn.Module):
