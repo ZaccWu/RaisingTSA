@@ -218,6 +218,7 @@ class Raise(torch.nn.Module):
         else:
             prob = F.softmax(rot_out, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
+        
         # final_pred: (batch)
         return final_pred, preds, prob
 

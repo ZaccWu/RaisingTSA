@@ -18,7 +18,7 @@ def mse_loss(pred, y, y_au):
     # # pred 为 logits
     # if y.shape != pred.shape:
     #     y = y[:, None].expand_as(pred).contiguous()
-    
+    y_au = y_au - torch.log(torch.tensor(2.5, device=y_au.device, dtype=y_au.dtype))
     loss = F.mse_loss(pred, y_au, reduction='none')
     mask = (y == 0).to(loss.dtype)
     loss = loss * mask

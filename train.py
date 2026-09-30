@@ -25,7 +25,7 @@ def _configTrainArgs():
 
     parser.add_argument('--data', type=str, help='load data', default='fs')
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--model', type=str, help='model name', default='rai')
+    parser.add_argument('--model', type=str, help='model name', default='lstm')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
     parser.add_argument('--extractor', type=str, help='model name', default='lstmtatt') # only functionable in 'rai' and 'raisp'
 
@@ -206,8 +206,8 @@ def train(args):
 
 
     ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.95, dim=None, keepdim=False))
-    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.9, dim=None, keepdim=False))
-    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.8, dim=None, keepdim=False))
+    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.90, dim=None, keepdim=False))
+    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.80, dim=None, keepdim=False))
     r1_rec = classification_report(ts_y.numpy(), ts_rec_r1.numpy(), target_names=['class0', 'class1'],
                             output_dict=True)['class1']['recall']
     r2_rec = classification_report(ts_y.numpy(), ts_rec_r2.numpy(), target_names=['class0', 'class1'],
