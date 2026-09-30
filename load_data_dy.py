@@ -28,8 +28,8 @@ def preprocessFmcgDt(product):
     thscode_select = list(df['filename'].unique())  # the product we choose
     time_stump_df = df['日期'].unique()  # total timesteps
     tks = {
-        'nc': {'TrVaSpl': 20240501, 'VaTsSpl': 20240511},
-        'fs': {'TrVaSpl': 20240501, 'VaTsSpl': 20240511},
+        'nc': {'TrVaSpl': 20240425, 'VaTsSpl': 20240501},
+        'fs': {'TrVaSpl': 20240425, 'VaTsSpl': 20240501},
     }
     df_trans = encodingFeatures(df)
     all_stock_feature, all_stock_sales = getNumpyTsaXYfromDf(df_trans, thscode_select)

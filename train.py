@@ -27,7 +27,7 @@ def _configTrainArgs():
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
     parser.add_argument('--model', type=str, help='model name', default='rai')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--extractor', type=str, help='model name', default='lstm') # only functionable in 'rai' and 'raisp'
+    parser.add_argument('--extractor', type=str, help='model name', default='lstmha') # only functionable in 'rai' and 'raisp'
 
     parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
