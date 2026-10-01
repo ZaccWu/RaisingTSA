@@ -14,7 +14,7 @@ import copy
 from RaiseModel import Raise, RaiseSep, sinkhorn, partial_sinkhorn, LSTM, GRU, Transformer, LSTMHA, LSTMTATT
 from load_data import LoadAliDt
 from load_data_dy import LoadFmcgDt
-from util.evaluate import mse_loss, transfer_pred, ev_loss, focal_loss, pairwise_ranking_loss, cal_ndcgK
+from util.evaluate import mse_loss, transfer_pred, contrastive_loss, focal_loss, pairwise_ranking_loss, cal_ndcgK
 from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import classification_report
 from scipy.stats import spearmanr
@@ -25,7 +25,7 @@ def _configTrainArgs():
 
     parser.add_argument('--data', type=str, help='load data', default='fs')
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--model', type=str, help='model name', default='rai')
+    parser.add_argument('--model', type=str, help='model name', default='raisp')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
     parser.add_argument('--extractor', type=str, help='model name', default='lstmha') # only functionable in 'rai' and 'raisp'
 
@@ -67,7 +67,7 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
         y_b = y_b.to(device)
 
         if args.model in ['rai', 'raisp']:
-            pred, _, prob, _ = model(x_b)
+            pred, _, prob = model(x_b)
             if prob is not None:
                 prd_select = prob.argmax(dim=-1).detach().cpu()
             else:
@@ -134,9 +134,9 @@ def train(args):
             optimizer.zero_grad()
             
             if args.model in ['rai', 'raisp']:
-                pred, all_preds, prob, mean_pred = model(x_b) # all_preds, prob: (B, num_states)
+                pred, all_preds, prob = model(x_b) # all_preds, prob: (B, num_states)
                 pred_loss = focal_loss(pred, y_b)
-                inv_loss = mse_loss(pred, y_b, y_au)
+                #inv_loss = mse_loss(pred, y_b, y_au)
 
                 if prob is not None:
                     L = focal_loss(all_preds, y_b)          # (B, num_states)
@@ -149,7 +149,11 @@ def train(args):
                     lamb = args.lamb * (args.rho ** global_step) # lamb=0 still have multi-expert
                     #直接让路由分布对齐 P，而不是反过来
                     ot_loss = F.kl_div(prob.log(), P, reduction='batchmean')
-                    loss = pred_loss.mean() + lamb * ot_loss + 0.1*inv_loss.mean()
+
+                    inv_loss = contrastive_loss(all_preds, y_b, device)
+                    #inv_loss = mse_loss(all_preds, y_b, y_au)
+
+                    loss = pred_loss.mean() + lamb*ot_loss + 0.1*inv_loss.mean()
 
                     # prob_safe = prob.clamp_min(1e-12)
                     # ot_loss = (P * prob_safe.log()).sum(dim=-1).mean()

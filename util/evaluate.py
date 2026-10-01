@@ -1,3 +1,4 @@
+from sympy.geometry.entity import y
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -8,6 +9,7 @@ def focal_loss(pred, y, alpha=0.8, gamma=2.0):
         y = y[:, None].expand_as(pred).contiguous()
     bce = F.binary_cross_entropy_with_logits(pred, y, reduction='none')
     p = torch.sigmoid(pred) # (n) or (n,k)
+
     p_t = p * y + (1 - p) * (1 - y)
     alpha_t = alpha * y + (1 - alpha) * (1 - y)   # 正样本 alpha 大
     loss = alpha_t * (1 - p_t).pow(gamma) * bce # (n) or (n,k)
@@ -16,13 +18,29 @@ def focal_loss(pred, y, alpha=0.8, gamma=2.0):
 def mse_loss(pred, y, y_au):
     
     # # pred 为 logits
-    # if y.shape != pred.shape:
-    #     y = y[:, None].expand_as(pred).contiguous()
+    if y.shape != pred.shape:
+        y = y[:, None].expand_as(pred).contiguous()
+        y_au = y_au[:, None].expand_as(pred).contiguous()
+
     y_au = y_au - torch.log(torch.tensor(2.5, device=y_au.device, dtype=y_au.dtype))
+
     loss = F.mse_loss(pred, y_au, reduction='none')
     mask = (y == 0).to(loss.dtype)
     loss = loss * mask
     return loss # loss, matrix
+
+
+def contrastive_loss(pred, y, device, m=3):
+    # target: 0-1, pred_score: float
+    Rs = torch.mean(pred, dim=0)
+    delta = torch.std(pred, dim=0)
+    dev_score = (pred - Rs)/(delta + 1e-10)
+    cont_score = torch.max(torch.zeros(pred.shape).to(device), m-dev_score)
+    loss = dev_score[(1-y).nonzero()].mean()#+cont_score[y.nonzero()].mean() 
+    return loss # sum sample loss
+
+
+
 
 def ev_loss(pred, y):  
     EPS = 1e-15

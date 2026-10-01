@@ -195,19 +195,11 @@ class Raise(torch.nn.Module):
         self.training = True
         self.fc = torch.nn.Linear(h_dim, self.num_states)
         self.predictors = torch.nn.Linear(h_dim, self.num_states)
-
-        # self.predictor1 = torch.nn.Linear(h_dim//2, 1)
-        # self.predictor2 = torch.nn.Linear(h_dim//2, 1)
-        # self.predictor3 = torch.nn.Linear(h_dim//2, 1)
-
         self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
         emb, _ = self.feature_extractor(x, fe=True) # (n, K, fea_dim)->(n, h_dim)
         preds = self.predictors(emb) # preds: (batch, 3)
-        # pred1, pred2, pred3 = self.predictor1(emb), self.predictor2(emb), self.predictor3(emb)
-        # preds = self.act(torch.cat([pred1, pred2, pred3], dim=1))
-
         # if self.num_states == 1:
         #     return preds.squeeze(-1), preds, None, None
         
@@ -215,14 +207,12 @@ class Raise(torch.nn.Module):
         if self.training:
             prob = F.gumbel_softmax(rot_out, tau=self.gstai, hard=False) # prob: (batch, num_state)
             final_pred = (preds * prob).sum(dim=-1)
-            mean_pred = preds.mean(dim=-1)
         else:
             prob = F.softmax(rot_out, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
-            mean_pred = preds.mean(dim=-1)
         
         # final_pred: (batch)
-        return final_pred, preds, prob, mean_pred
+        return final_pred, preds, prob
 
 
 class RaiseSep(torch.nn.Module):
@@ -231,23 +221,23 @@ class RaiseSep(torch.nn.Module):
         self.num_states = num_states
         self.gstai = 1
         if extractor == 'lstm':
-            self.feature_extractor = LSTM(in_dim, h_dim, out_dim=h_dim*2)
+            self.feature_extractor = LSTM(in_dim, h_dim, out_dim=h_dim)
         elif extractor == 'gru':
-            self.feature_extractor = GRU(in_dim, h_dim, out_dim=h_dim*2)
+            self.feature_extractor = GRU(in_dim, h_dim, out_dim=h_dim)
         elif extractor == 'trans':
-            self.feature_extractor = Transformer(30, in_dim, h_dim, out_dim=h_dim*2)
+            self.feature_extractor = Transformer(30, in_dim, h_dim, out_dim=h_dim)
         elif extractor == 'lstmha':
-            self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim*2)
+            self.feature_extractor = LSTMHA(in_dim, h_dim, out_dim=h_dim)
         elif extractor == 'lstmtatt':
-            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim*2)
+            self.feature_extractor = LSTMTATT(30, in_dim, h_dim, out_dim=h_dim)
         else:
             raise ValueError('Extractor not specify')
 
         self.training = True
         #self.router = Decoder(in_dim, 16, in_dim)
 
-        self.fc = torch.nn.Linear(h_dim, num_states)
-        self.predictors = torch.nn.Linear(h_dim, self.num_states)
+        self.fc = torch.nn.Linear(h_dim//2, num_states)
+        self.predictors = torch.nn.Linear(h_dim//2, self.num_states)
         self.act = torch.nn.LeakyReLU()
 
     def forward(self, x):
@@ -287,5 +277,5 @@ class RaiseSep(torch.nn.Module):
         # hard_pred = (preds * hard_ste).sum(dim=-1)                # (n,)
         # final_pred = hard_pred * (1.0 - high_re_mask) + soft_pred * high_re_mask
 
-        return final_pred, preds, prob#, batch_mean_err
+        return final_pred, preds, prob
     
