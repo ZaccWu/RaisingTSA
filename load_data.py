@@ -40,8 +40,8 @@ def getDv(all_stock_sales, time_len, num_stock, tau):
     for i in range(time_len - tau):
         all_stock_return[i] = np.sum(all_stock_sales[i: i + tau], axis=0) / (np.sum(all_stock_sales[i-tau: i], axis=0) + np.ones(all_stock_sales[i].shape))  ## avoid zero
         all_stock_dv, all_stock_dvclass = np.array(all_stock_return.copy()), np.array(all_stock_return.copy())
-        all_stock_dvclass[all_stock_return < 2] = 0
-        all_stock_dvclass[all_stock_return >= 2] = 1
+        all_stock_dvclass[all_stock_return < 1.5] = 0
+        all_stock_dvclass[all_stock_return >= 1.5] = 1
         all_stock_dv = np.log(all_stock_dv+1)
     return all_stock_dv, all_stock_dvclass
 
