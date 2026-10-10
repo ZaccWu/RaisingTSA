@@ -97,12 +97,12 @@ def getFmcgRawDt(product):
 
 
 class LoadFmcgDt():
-    def __init__(self, product='fs'):
+    def __init__(self, product='fs', hori=76):
         self.K = 30  # lookback window size (larger than tau)
         self.tau = 3 # predict timestep ahead (define of raising)
         self.all_stock_feature, self.all_stock_sales, self.train_len, self.trainval_len, self.time_stump_df, self.thscode_select = preprocessFmcgDt(product=product)
         self.num_stock = len(self.thscode_select)
-        self.time_length = 76 #len(self.time_stump_df)
+        self.time_length = hori #len(self.time_stump_df)
         # dvckass -> (time_step-tau, stock_num)
         self.all_stock_dv, self.all_stock_dvclass = getDv(self.all_stock_sales, total_time_step=len(self.time_stump_df), num_stock=self.num_stock, tau=self.tau)
         
