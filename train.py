@@ -30,7 +30,7 @@ def _configTrainArgs():
     
     parser.add_argument('--model', type=str, help='model name', default='raisp')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--extractor', type=str, help='model name', default='lstmha') # only functionable in 'rai' and 'raisp'
+    parser.add_argument('--extractor', type=str, help='model name', default='lstmtatt') # only functionable in 'rai' and 'raisp'
 
     parser.add_argument('--ot', type=str, help='sinkhorn type', default='partial')
     parser.add_argument('--ns', type=int, help='num of state', default=3)
@@ -38,7 +38,7 @@ def _configTrainArgs():
     parser.add_argument('--tai', type=float, default=0.1, help='entropic tai for partial OT') # default 0.1
     parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=64) # 64
 
-    parser.add_argument('--lamb', type=float, help='rho', default=0.01) # default 1
+    parser.add_argument('--lamb', type=float, help='rho', default=0.1) # default 0.1
     parser.add_argument('--lr', type=float, help='learning rate', default=0.01) # default 0.01
 
     parser.add_argument('--bs', type=int, help='batch size', default=8192) # cpu: 8192, gpu: 2048
@@ -65,7 +65,7 @@ def evalInBatches(args, model, data_loader, device, return_loss=True):
     model.eval()
     preds_list, y_list, y_bin_list, prds_list = [], [], [], []
     loss_sum, n_sample = 0.0, 0
-    for x_b, y_b, _ in data_loader:
+    for x_b, y_b, _ in data_loader: # x_b: (n_sample, K, D)
         x_b = x_b.to(device)
         y_b = y_b.to(device)
 
@@ -213,10 +213,9 @@ def train(args):
     model.load_state_dict(best_model_state)
     ts_pred, ts_y, ts_prds, _ = evalInBatches(args, model, tsDt_loader, device, return_loss=False)
 
-    # ts_mse = F.mse_loss(ts_pred, ts_y, reduction='mean').numpy()
-    # ts_mae = (ts_pred - ts_y).abs().mean().item()
-    # ts_spearman = spearmanr(ts_pred.numpy(), ts_y.numpy()).correlation
-
+    # prediction explanation
+    prds_res = pd.DataFrame(np.concatenate([ts_prds.reshape(-1, 3).numpy(), ts_y.reshape(-1, 3).numpy(), ts_pred.reshape(-1, 3).numpy()], axis=-1)) # 3 days test
+    prds_res.to_csv('prds_res.csv')
 
     ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.85, dim=None, keepdim=False))
     ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.70, dim=None, keepdim=False))
@@ -280,7 +279,7 @@ if __name__ == "__main__":
     #     'mae': [],
     #     'pear': [],
     # }
-    for seed in range(101,111):
+    for seed in range(101,102):
         set_seed(seed)
         #ts_res, ts_res_f = train(args)
         ts_res = train(args)

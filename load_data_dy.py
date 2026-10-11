@@ -137,6 +137,7 @@ class LoadFmcgDt():
             tsX.append(features)
             tsY.append(labels)
             tsYau.append(labels_au)
+        # tsX: day-wise concate on samples
         tsX, tsY, tsYau = np.concatenate(tsX, axis=0), np.concatenate(tsY, axis=0), np.concatenate(tsYau, axis=0)
         tsDt = TSAData(tsX, tsY, tsYau)
 
