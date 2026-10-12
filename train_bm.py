@@ -1,0 +1,233 @@
+import random
+import pandas as pd
+import numpy as np
+import math
+import argparse
+import os
+from sympy import KroneckerDelta
+import torch
+from torch._inductor.codegen.wrapper import KernelCallLine
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+import copy
+from BmModel import Transformer, MoETransformer, MoLETransformer, DCDetector, CARLA, DeepARTransformer
+from load_data import LoadAliDt
+from load_data_dy import LoadFmcgDt
+from util.evaluate import transfer_pred, focal_loss, cal_ndcgK
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import classification_report
+from scipy.stats import spearmanr
+
+def _configTrainArgs():
+    parser = argparse.ArgumentParser('Raising star prediction: Commonality and individuality')
+
+    parser.add_argument('--data', type=str, help='load data', default='fs')
+    # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
+    parser.add_argument('--hori', type=str, help='test horizon', default=76)
+    # more than 76
+    
+    parser.add_argument('--model', type=str, help='model name', default='deepar')
+    # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
+    parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=64) # 64
+    parser.add_argument('--lr', type=float, help='learning rate', default=0.01) # default 0.01
+
+    parser.add_argument('--bs', type=int, help='batch size', default=8192) # cpu: 8192, gpu: 2048
+    parser.add_argument('--n_epoch', type=int, help='number of epochs', default=100)
+    parser.add_argument('--gpu', type=int, help='idx for the gpu to use', default=0)
+    return parser.parse_args()
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+def transfer_pred(out, threshold):
+    pred = out.clone()
+    pred[torch.where(out < threshold)] = 0
+    pred[torch.where(out >= threshold)] = 1
+    return pred
+
+@torch.no_grad()
+def evalInBatches(args, model, data_loader, device, return_loss=True):
+    model.eval()
+    preds_list, y_list = [], []
+    loss_sum, n_sample = 0.0, 0
+    for x_b, y_b, _ in data_loader: # x_b: (n_sample, K, D)
+        x_b = x_b.to(device)
+        y_b = y_b.to(device)
+        if args.model == 'deepar':
+            _, _, mu, sigma = model(x_b, return_stats=True)
+            loss_b = model.nll_loss_fn(y_b, mu, sigma)
+            pred = mu
+        else:
+            pred, _ = model(x_b)
+            loss_b = focal_loss(pred, y_b)
+        
+        loss_sum += loss_b.sum()
+        n_sample += x_b.size(0)
+        preds_list.append(pred.detach().cpu())
+        y_list.append(y_b.detach().cpu())
+
+    preds_all = torch.cat(preds_list, dim=0)
+    y_all = torch.cat(y_list, dim=0)
+    avg_loss = (loss_sum / max(n_sample, 1)) if return_loss else None
+    return preds_all, y_all, avg_loss
+
+
+def train(args):
+    device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() else 'cpu')
+    if args.data == 'ali':
+        data_loader = LoadAliDt()
+    else:
+        data_loader = LoadFmcgDt(product=args.data, hori=args.hori)
+    trDt, vaDt, tsDt = data_loader.loadTrainTest()
+    trDt_loader = DataLoader(trDt, batch_size=args.bs, shuffle=True)
+    vaDt_loader = DataLoader(vaDt, batch_size=args.bs, shuffle=False)
+    tsDt_loader = DataLoader(tsDt, batch_size=args.bs, shuffle=False)
+
+    if args.model == 'trans':
+        model = Transformer(lag=30, in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
+    elif args.model in ['moe', 'moe_aux']:
+        model = MoETransformer(lag=30, in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
+    elif args.model == 'mole':
+        model = MoLETransformer(lag=30, in_dim=trDt.x.shape[-1], h_dim=args.h_dim, out_dim=1).to(device)
+    elif args.model == 'dcd':
+        model = DCDetector(lag=30, in_dim=trDt.x.shape[-1],
+                                      h_dim=args.h_dim, out_dim=1).to(device)
+    elif args.model == 'carla':
+        model = CARLA(lag=30, in_dim=trDt.x.shape[-1],
+                                 h_dim=args.h_dim, out_dim=1).to(device)
+    elif args.model == 'deepar':
+        model = DeepARTransformer(lag=30, in_dim=trDt.x.shape[-1],
+                                  h_dim=args.h_dim, out_dim=1).to(device)
+    else:
+        assert ValueError('Model not specified')
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
+    global_step = -1
+    best_va_score, best_epoch_id = -np.inf, 0
+    
+    for i in range(args.n_epoch):
+        model.training = True
+        model.train()
+        for batch_idx, (x_b, y_b, y_au) in enumerate(trDt_loader):
+            x_b, y_b, y_au = x_b.to(device), y_b.to(device), y_au.to(device)
+            optimizer.zero_grad()
+            pred, _ = model(x_b) # pred: (B, num_states)
+            if args.model == 'deepar':
+                _, _, mu, sigma = model(x_b, return_stats=True)
+                loss = model.nll_loss_fn(y_b, mu, sigma)
+            else:
+                loss = focal_loss(pred, y_b).mean()
+                if args.model == 'moe_aux':      # MoE_aux 才有
+                    loss = loss + model.aux_loss
+                elif args.model in ['dcd', 'carla']:
+                    loss = loss + model.contrastive_loss   # 叠加对比损失
+                
+            loss.backward()
+            optimizer.step()
+        
+        model.training = False
+        va_pred, va_y, va_loss = evalInBatches(args, model, vaDt_loader, device)
+        ts_pred, ts_y, _ = evalInBatches(args, model, tsDt_loader, device)
+
+        va_rec_r3 = transfer_pred(va_pred, torch.quantile(va_pred, 0.5, dim=None, keepdim=False))
+        ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.5, dim=None, keepdim=False))
+
+        rec_val = classification_report(va_y.numpy(), va_rec_r3.numpy(), target_names=['class0', 'class1'],
+                                output_dict=True)['class1']['recall']
+        # _, pred_r3_va = torch.topk(va_pred.detach(), k=len(np.nonzero(va_rec_r3.numpy())[0]))
+        # r3_ndcg_va = cal_ndcgK(np.nonzero(va_y.numpy())[0], pred_r3_va.numpy())
+
+        rec_ts = classification_report(ts_y.numpy(), ts_rec_r3.numpy(), target_names=['class0', 'class1'],
+                                output_dict=True)['class1']['recall']
+        # _, pred_r3_ts = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r3.numpy())[0]))
+        # r3_ndcg_ts = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r3_ts.numpy())
+        
+        va_score = rec_val
+
+        # va_score = F.mse_loss(va_pred, va_y, reduction='mean').numpy()
+
+        print(' Epoch {}, va_loss {:.4f},  va_score {:.4f}, ts_score {:.4f}'.format(i, va_loss, rec_val, rec_ts))
+        #print('Predictors: ', pd.Series(va_prds.numpy()).value_counts())
+        if va_score > best_va_score:
+            best_va_score = va_score
+            best_model_state = copy.deepcopy(model.state_dict())
+            best_epoch_id = i
+    final_model_state = copy.deepcopy(model.state_dict())
+    
+    model.training = False
+    model.load_state_dict(best_model_state)
+    ts_pred, ts_y, _ = evalInBatches(args, model, tsDt_loader, device, return_loss=False)
+
+    ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.85, dim=None, keepdim=False))
+    ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.70, dim=None, keepdim=False))
+    ts_rec_r3 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.50, dim=None, keepdim=False))
+    r1_rec = classification_report(ts_y.numpy(), ts_rec_r1.numpy(), target_names=['class0', 'class1'],
+                            output_dict=True)['class1']['recall']
+    r2_rec = classification_report(ts_y.numpy(), ts_rec_r2.numpy(), target_names=['class0', 'class1'],
+                            output_dict=True)['class1']['recall']
+    r3_rec = classification_report(ts_y.numpy(), ts_rec_r3.numpy(), target_names=['class0', 'class1'],
+                            output_dict=True)['class1']['recall']
+    auc = roc_auc_score(ts_y.numpy(),ts_pred.numpy())
+
+    _, pred_r1 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r1.numpy())[0]))  # pred_r1: (k_rec_content)
+    _, pred_r2 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r2.numpy())[0]))
+    _, pred_r3 = torch.topk(ts_pred.detach(), k=len(np.nonzero(ts_rec_r3.numpy())[0]))
+
+    r1_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r1.numpy())
+    r2_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r2.numpy())
+    r3_ndcg = cal_ndcgK(np.nonzero(ts_y.numpy())[0], pred_r3.numpy())
+
+    print('Best epoch: ', best_epoch_id)
+    print('r1_rec {:3f},'.format(r1_rec),
+        'r2_rec {:3f},'.format(r2_rec),
+        'r3_rec {:3f},'.format(r3_rec),
+        'r1_ndcg {:3f},'.format(r1_ndcg),
+        'r2_ndcg {:3f},'.format(r2_ndcg),
+        'r3_ndcg {:3f},'.format(r3_ndcg),
+        'AUC {:3f},'.format(auc))
+
+    return {
+        'r1_rec':  r1_rec,
+        'r2_rec':  r2_rec,
+        'r3_rec':  r3_rec,
+        'r1_ndcg': r1_ndcg,
+        'r2_ndcg': r2_ndcg,
+        'r3_ndcg': r3_ndcg,
+        'auc':     auc,
+    }
+
+if __name__ == "__main__":
+    args = _configTrainArgs()
+    repeat_res = {
+        'r1_rec': [], 'r2_rec': [], 'r3_rec': [],
+        'r1_ndcg': [], 'r2_ndcg': [], 'r3_ndcg': [],
+        'auc': [],
+    }
+    for seed in range(101,111):
+        set_seed(seed)
+        ts_res = train(args)
+        repeat_res['r1_rec'].append(ts_res['r1_rec'])
+        repeat_res['r2_rec'].append(ts_res['r2_rec'])
+        repeat_res['r3_rec'].append(ts_res['r3_rec'])
+        repeat_res['r1_ndcg'].append(ts_res['r1_ndcg'])
+        repeat_res['r2_ndcg'].append(ts_res['r2_ndcg'])
+        repeat_res['r3_ndcg'].append(ts_res['r3_ndcg'])
+        repeat_res['auc'].append(ts_res['auc'])
+
+    
+    print('AUC {:.4f} ({:.3f}), '.format(np.mean(repeat_res['auc']), np.std(repeat_res['auc'])),
+          ' R@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_rec']), np.std(repeat_res['r1_rec'])),
+          ' R@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_rec']), np.std(repeat_res['r2_rec'])),
+          ' R@3 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r3_rec']), np.std(repeat_res['r3_rec'])),
+          ' N@1 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r1_ndcg']), np.std(repeat_res['r1_ndcg'])),
+          ' N@2 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r2_ndcg']), np.std(repeat_res['r2_ndcg'])),
+          ' N@3 {:.4f} ({:.3f}), '.format(np.mean(repeat_res['r3_ndcg']), np.std(repeat_res['r3_ndcg'])),)
+
+    print('All results | data: ', args.data, 'model: ', args.model)
+
