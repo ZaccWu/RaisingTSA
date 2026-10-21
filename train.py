@@ -25,9 +25,9 @@ def _configTrainArgs():
 
     parser.add_argument('--data', type=str, help='load data', default='fs')
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
-    parser.add_argument('--hori', type=str, help='test horizon', default=76)
+    parser.add_argument('--hori', type=int, help='test horizon', default=76)
     # more than 76
-    parser.add_argument('--roll', type=str, help='rolling period', default=0) # default 0
+    parser.add_argument('--roll', type=int, help='rolling period', default=0) # default 0
     
     parser.add_argument('--model', type=str, help='model name', default='raisp')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
