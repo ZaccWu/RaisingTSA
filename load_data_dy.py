@@ -97,7 +97,7 @@ def getFmcgRawDt(product):
 
 
 class LoadFmcgDt():
-    def __init__(self, product='fs', hori=76):
+    def __init__(self, product='fs', hori=76, roll=0):
         self.K = 30  # lookback window size (larger than tau)
         self.tau = 3 # predict timestep ahead (define of raising)
         self.all_stock_feature, self.all_stock_sales, self.train_len, self.trainval_len, self.time_stump_df, self.thscode_select = preprocessFmcgDt(product=product)
@@ -105,6 +105,7 @@ class LoadFmcgDt():
         self.time_length = hori #len(self.time_stump_df)
         # dvckass -> (time_step-tau, stock_num)
         self.all_stock_dv, self.all_stock_dvclass = getDv(self.all_stock_sales, total_time_step=len(self.time_stump_df), num_stock=self.num_stock, tau=self.tau)
+        self.roll = roll
         
     def loadSamples(self, date, type='clas'):
         features = self.all_stock_feature[:, date:date + self.K, :] # process feature (N, time_step, feature_dim)
@@ -114,7 +115,7 @@ class LoadFmcgDt():
     
     def loadTrainTest(self):
         trX, trY, trYau = [], [], []
-        for date in range(0, self.train_len-self.tau-self.K):
+        for date in range(0+self.roll, self.train_len-self.tau-self.K+self.roll):
             features, labels, labels_au = self.loadSamples(date)
             trX.append(features)
             trY.append(labels)
@@ -123,7 +124,7 @@ class LoadFmcgDt():
         trDt = TSAData(trX, trY, trYau)
 
         vaX, vaY, vaYau = [], [], []
-        for date in range(self.train_len-self.tau-self.K, self.trainval_len-self.tau-self.K):
+        for date in range(self.train_len-self.tau-self.K+self.roll, self.trainval_len-self.tau-self.K+self.roll):
             features, labels, labels_au = self.loadSamples(date)
             vaX.append(features)
             vaY.append(labels)
@@ -132,7 +133,7 @@ class LoadFmcgDt():
         vaDt = TSAData(vaX, vaY, vaYau)
 
         tsX, tsY, tsYau = [], [], []
-        for date in range(self.trainval_len-self.tau-self.K, self.time_length-self.tau-self.K):
+        for date in range(self.trainval_len-self.tau-self.K+self.roll, self.time_length-self.tau-self.K+self.roll):
             features, labels, labels_au = self.loadSamples(date)
             tsX.append(features)
             tsY.append(labels)

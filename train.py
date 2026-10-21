@@ -27,6 +27,7 @@ def _configTrainArgs():
     # 'rai', 'raisp', 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
     parser.add_argument('--hori', type=str, help='test horizon', default=76)
     # more than 76
+    parser.add_argument('--roll', type=str, help='rolling period', default=0) # default 0
     
     parser.add_argument('--model', type=str, help='model name', default='raisp')
     # 'lstm', 'gru', 'trans', 'lstmha', 'lstmtatt'
@@ -100,7 +101,7 @@ def train(args):
     if args.data == 'ali':
         data_loader = LoadAliDt()
     else:
-        data_loader = LoadFmcgDt(product=args.data, hori=args.hori)
+        data_loader = LoadFmcgDt(product=args.data, hori=args.hori, roll=args.roll)
     trDt, vaDt, tsDt = data_loader.loadTrainTest()
     trDt_loader = DataLoader(trDt, batch_size=args.bs, shuffle=True)
     vaDt_loader = DataLoader(vaDt, batch_size=args.bs, shuffle=False)
@@ -213,9 +214,9 @@ def train(args):
     model.load_state_dict(best_model_state)
     ts_pred, ts_y, ts_prds, _ = evalInBatches(args, model, tsDt_loader, device, return_loss=False)
 
-    # prediction explanation
-    prds_res = pd.DataFrame(np.concatenate([ts_prds.reshape(-1, 3).numpy(), ts_y.reshape(-1, 3).numpy(), ts_pred.reshape(-1, 3).numpy()], axis=-1)) # 3 days test
-    prds_res.to_csv('prds_res.csv')
+    # # prediction explanation
+    # prds_res = pd.DataFrame(np.concatenate([ts_prds.reshape(-1, 3).numpy(), ts_y.reshape(-1, 3).numpy(), ts_pred.reshape(-1, 3).numpy()], axis=-1)) # 3 days test
+    # prds_res.to_csv('prds_res.csv')
 
     ts_rec_r1 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.85, dim=None, keepdim=False))
     ts_rec_r2 = transfer_pred(ts_pred, torch.quantile(ts_pred, 0.70, dim=None, keepdim=False))
@@ -308,7 +309,7 @@ if __name__ == "__main__":
     # ' Pear {:.4f} ({:.3f}), '.format(np.mean(repeat_res['pear']), np.std(repeat_res['pear']))
     # )
 
-    print('All results | data: ', args.data, 'model: ', args.model,  'hori: ', args.hori)
+    print('All results | data: ', args.data, 'model: ', args.model,  'roll: ', args.roll)
     #print('All results | data: ', args.data, 'model: ', args.model,  'ns: ', args.ns, 'lamb', args.lamb)
     if args.model in ['rai', 'raisp']:
         print('Extractor: ', args.extractor)
