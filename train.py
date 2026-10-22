@@ -280,7 +280,7 @@ if __name__ == "__main__":
     #     'mae': [],
     #     'pear': [],
     # }
-    for seed in range(101,102):
+    for seed in range(101,111):
         set_seed(seed)
         #ts_res, ts_res_f = train(args)
         ts_res = train(args)

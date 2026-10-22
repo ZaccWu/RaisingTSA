@@ -151,8 +151,8 @@ if __name__ == '__main__':
     dataLoader = LoadFmcgDt(product='fs')
     # print(np.mean(dataLoader.all_stock_dv),np.std(dataLoader.all_stock_dv),np.max(dataLoader.all_stock_dv),np.min(dataLoader.all_stock_dv))
     trDt, vaDt, tsDt = dataLoader.loadTrainTest()
-    print(trDt.x.shape, vaDt.x.shape, tsDt.x.shape) # [337144, 30, 10], [99160, 30, 10], [198320, 30, 10]
-    print(trDt.y.shape, vaDt.y.shape, tsDt.y.shape) # [337144], [99160], [198320]
+    print(trDt.x.shape, vaDt.x.shape, tsDt.x.shape) # torch.Size([13135, 30, 5]) torch.Size([1065, 30, 5]) torch.Size([1065, 30, 5])
+    print(trDt.y.shape, vaDt.y.shape, tsDt.y.shape) # torch.Size([13135]) torch.Size([1065]) torch.Size([1065])
 
     print(pd.Series(dataLoader.all_stock_dvclass.flatten()).value_counts())
     #print(dataLoader.all_stock_dv)

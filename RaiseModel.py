@@ -269,6 +269,17 @@ class RaiseSep(torch.nn.Module):
         else:
             prob = F.softmax(rot_out, dim=-1)
             final_pred = preds[range(len(preds)), prob.argmax(dim=-1)]
+
+            # ablation 1
+            # num_predictors = prob.size(-1) 
+            # batch_size = prob.size(0)
+            # # 生成完全随机的索引 (0 到 num_predictors-1)
+            # random_idx = torch.randint(0, num_predictors, (batch_size,), device=prob.device)
+            
+            # batch_idx = torch.arange(len(preds), device=preds.device)
+            # final_pred = preds[batch_idx, random_idx]
+
+            # ablation 2
             #final_pred = (preds * prob).sum(dim=-1)
         # soft_pred = (preds * prob).sum(dim=-1)     # (n,)
         # hard_idx = prob.argmax(dim=-1, keepdim=True)              # (n, 1)
