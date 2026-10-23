@@ -39,7 +39,7 @@ def _configTrainArgs():
     parser.add_argument('--tai', type=float, default=0.1, help='entropic tai for partial OT') # default 0.1
     parser.add_argument('--h_dim', type=int, help='dimension of the seq emb', default=64) # 64
 
-    parser.add_argument('--lamb', type=float, help='rho', default=0.1) # default 0.1
+    parser.add_argument('--lamb', type=float, help='lamb', default=0.1) # default 0.1
     parser.add_argument('--lr', type=float, help='learning rate', default=0.01) # default 0.01
 
     parser.add_argument('--bs', type=int, help='batch size', default=8192) # cpu: 8192, gpu: 2048

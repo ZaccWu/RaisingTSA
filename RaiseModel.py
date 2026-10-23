@@ -24,7 +24,8 @@ def partial_sinkhorn(Q, epsilon=0.1, tai=0.1, n_iters=20):
         u = torch.ones(B,  1, device=K.device, dtype=K.dtype)     # (num_sample, 1)
         v = torch.ones(Kd, 1, device=K.device, dtype=K.dtype)     # (n_state, 1)  
         for _ in range(n_iters):
-            u = (a / (K @ v + 1e-12)).pow(rho)
+            #u = (a / (K @ v + 1e-12)).pow(rho)
+            u = a / (K @ v + 1e-12)
             v = (b / (K.t() @ u + 1e-12)).pow(rho)
         Q = u * K * v.t() 
         Q = Q / (Q.sum(dim=1, keepdim=True) + 1e-12)
